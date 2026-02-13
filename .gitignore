@@ -1,0 +1,94 @@
+# TorChannel .gitignore
+
+# Exclude specific directories
+matlab/
+.susa/
+.fortran/
+.claude/
+.pytest_cache/
+
+# Config files - only keep config550.yaml
+config.yaml
+config_canopy_monti.yaml
+config_sharma_validation.yaml
+
+# Canopy and cylinder related files
+*canopy*
+*cylinder*
+*sphere*
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Jupyter Notebooks
+.ipynb_checkpoints
+*.ipynb
+
+# Results and output
+results*/
+BACKUP*/
+*.npz
+*.csv
+*.png
+*.pdf
+timeseries.csv
+timeseries.npz
+
+# Exceptions: Keep example results if desired
+# !example_results/
+
+# Log files
+*.log
+*.out
+*.err
+
+# Temporary files
+*.tmp
+temp/
+tmp/
+
+# HPC job files
+*.o[0-9]*
+*.e[0-9]*
+slurm-*.out
+
+# Large data files
+*.h5
+*.hdf5
+
+# Configuration backups
+config.yaml.bak
+*.yaml.bak

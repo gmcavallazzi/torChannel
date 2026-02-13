@@ -1,0 +1,69 @@
+#!/bin/bash
+#SBATCH -D /users/addh496/sharedscratch/python_DNS_playground/DNS_homemade
+#SBATCH -J DNS_GPU
+#SBATCH --partition=preemptgpu
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=40G
+#SBATCH --time=08:00:00
+#SBATCH --output=R-%x.%j.out
+##SBATCH --gres=gpu:a100_80g:1
+# Uncomment the appropriate GPU line based on your needs:
+#SBATCH --gres=gpu:1
+#SBATCH --exclude=gpu01
+##SBATCH --gres=gpu:rtx8000:1
+##SBATCH --gres=gpu:a100_80g:1
+
+# Load environment setup
+flight env activate gridware
+module load apps/nvhpc/23.9
+module load libs/nvidia-cuda/11.1.1/bin
+module load cudnn/8.5.0
+
+# Conda setup
+__conda_setup="$('/users/addh496/sharedscratch/anaconda3/bin/conda' 'shell.bash' 'hook' 2> /dev/null)"
+if [ $? -eq 0 ]; then
+    eval "$__conda_setup"
+else
+    if [ -f "/users/addh496/sharedscratch/anaconda3/etc/profile.d/conda.sh" ]; then
+        . "/users/addh496/sharedscratch/anaconda3/etc/profile.d/conda.sh"
+    else
+        export PATH="/users/addh496/sharedscratch/anaconda3/bin:$PATH"
+    fi
+fi
+unset __conda_setup
+
+# Activate torch_modern environment instead of cfd_gan
+conda activate torch_modern
+
+# Set up LD_PRELOAD for libstdc++ compatibility
+export LD_PRELOAD="$CONDA_PREFIX/lib/libstdc++.so.6"
+export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:$LD_LIBRARY_PATH"
+
+# Set PYTHONPATH
+export PYTHONPATH=$(python -c "import sys; print(':'.join(sys.path))")
+
+# Print debug information
+echo "Number of nodes: $SLURM_JOB_NUM_NODES"
+echo "Total tasks: $SLURM_NTASKS"
+echo "Node list: $SLURM_JOB_NODELIST"
+echo "Current conda environment: $CONDA_PREFIX"
+echo "LD_PRELOAD: $LD_PRELOAD"
+
+# Check GPU allocation in Slurm
+echo "CUDA_VISIBLE_DEVICES: $CUDA_VISIBLE_DEVICES"
+echo "SLURM_GPUS: $SLURM_GPUS"
+echo "SLURM_GPUS_ON_NODE: $SLURM_GPUS_ON_NODE"
+echo "SLURM_JOB_GPUS: $SLURM_JOB_GPUS"
+
+# Check if NVIDIA drivers are working
+nvidia-smi
+
+# Verify PyTorch can see the GPU
+echo "Checking PyTorch GPU access:"
+python -c "import torch; print('PyTorch version:', torch.__version__); print('CUDA available:', torch.cuda.is_available()); print('CUDA version:', torch.version.cuda); print('GPU count:', torch.cuda.device_count()); [print(f'GPU {i}: {torch.cuda.get_device_name(i)}') for i in range(torch.cuda.device_count())]"
+
+# Run your main script
+echo "Running main script..."
+python main.py

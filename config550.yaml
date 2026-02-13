@@ -1,0 +1,121 @@
+# ==============================================================================
+# DNS CHANNEL FLOW CONFIGURATION
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# GRID PARAMETERS
+# ------------------------------------------------------------------------------
+grid:
+  nx: 768    # Number of grid points in streamwise (x) direction
+  ny: 768    # Number of grid points in spanwise (y) direction
+  nz: 180    # Number of grid points in wall-normal (z) direction
+
+# ------------------------------------------------------------------------------
+# DOMAIN SIZE
+# ------------------------------------------------------------------------------
+domain:
+  Lx: 15.707  # Streamwise domain length (5π for this case)
+  Ly: 6.282   # Spanwise domain length (2π for this case)
+  Lz: 2.0     # Wall-normal domain height (channel half-height = 1.0)
+
+# ------------------------------------------------------------------------------
+# FLOW PARAMETERS
+# ------------------------------------------------------------------------------
+flow:
+  Re: 10000.0      # Bulk Reynolds number (Re = U_bulk * Lz / ν)
+  Re_tau: 550.0    # Target friction Reynolds number (Re_τ = u_τ * δ / ν, where δ = Lz/2)
+  U_bulk: 1.0      # Target bulk velocity (enforced via forcing)
+  gamma: 2.6       # Grid stretching parameter for wall-normal direction (higher = more clustering near walls)
+
+# ------------------------------------------------------------------------------
+# INITIALIZATION
+# ------------------------------------------------------------------------------
+initialization:
+  # Initial flow field type (used only when field_file is not specified)
+  type: "vortices"  # Options: "vortices", "random", "parabolic", "laminar"
+
+  # Parameters for vortex initialization
+  perturbation_intensity: 0.08  # Amplitude of velocity perturbations
+  n_vortices: 4                # Number of counter-rotating vortex pairs
+
+  # RESTART FROM CHECKPOINT (uncomment to enable)
+  field_file: "results_big_550_stats/fields.npz"  # Path to saved flow field file
+  reset_time: false                 # false: continue from saved time/step, true: reset to t=0, step=0
+
+  # NOTE: If field_file is in the output folder, it will be preserved during folder cleaning
+
+# ------------------------------------------------------------------------------
+# POISSON SOLVER
+# ------------------------------------------------------------------------------
+solver:
+  type: "fft"  # Poisson solver type. Options: "fft" (fast, recommended), "direct" (slow, for testing)
+
+# ------------------------------------------------------------------------------
+# TIME INTEGRATION
+# ------------------------------------------------------------------------------
+time:
+  dt: 0.002               # Initial timestep (will adapt if dt_update_interval > 0)
+  n_steps: 2000000000        # Maximum number of timesteps
+  t_max: 300.0            # Maximum physical time (simulation stops at min(n_steps, t_max/dt))
+
+  # Adaptive timestep control
+  CFL_target: 0.28        # Target CFL number for adaptive timestep
+  dt_update_interval: 10  # Update dt every N steps (0 = disable adaptive timestepping)
+  dt_max: 0.011           # Maximum allowed timestep
+  dt_min: 0.0003           # Minimum allowed timestep
+
+  # Time integration scheme
+  scheme: "IMEX"  # Options: "IMEX" (implicit wall-normal diffusion, recommended),
+                  #          "AB2" (explicit Adams-Bashforth 2nd order),
+                  #          "FE" (Forward Euler, for testing only)
+
+# ------------------------------------------------------------------------------
+# COMPUTE DEVICE
+# ------------------------------------------------------------------------------
+compute:
+  device: "auto"  # Options: "cuda" (GPU), "cpu", "auto" (uses GPU if available)
+
+# ------------------------------------------------------------------------------
+# OUTPUT CONTROL
+# ------------------------------------------------------------------------------
+output:
+  results_folder: results_big_550_stats  # Output directory (created if doesn't exist)
+  n_out: 200                   # Print diagnostics every n_out steps
+  n_save: 4000                 # Save flow fields every n_save steps
+
+  # Saved files:
+  #   - fields_init.npz: Initial flow field
+  #   - fields.npz: Latest checkpoint (updated every n_save steps)
+  #   - fields_final.npz: Final flow field
+  #   - timeseries.npz: Time history of bulk velocity, u_tau, forcing
+
+# ------------------------------------------------------------------------------
+# TURBULENCE STATISTICS
+# ------------------------------------------------------------------------------
+statistics:
+  enabled: true  # Enable/disable statistics collection (set to true to collect)
+
+  # Collection parameters
+  n_stats: 250     # Collect statistics every n_stats steps
+  t_stats: 101.0    # Start collecting statistics after this physical time
+
+  # Output files
+  output_file: "turbulence_stats.npz"        # Final averaged statistics (saved at end)
+  state_file: "turbulence_stats_state.npz"   # Checkpoint file (auto-saved with fields)
+
+  # Spectral parameters
+  z_plus_target: 15.0  # Wall distance in wall units (z⁺) for 2D premultiplied spectra
+
+  # RESTART STATISTICS FROM CHECKPOINT (uncomment to enable)
+  restart_state_file: "results_big_550_stats/turbulence_stats_state.npz"
+
+  # Statistics computed:
+  #   - Mean profiles: U(z), dU/dz(z), ω_y(z)
+  #   - Reynolds stresses: u'u'(z), v'v'(z), w'w'(z), u'w'(z)
+  #   - 1D energy spectra: E_uu(kx), E_uu(kz)
+  #   - 2D premultiplied spectra at z⁺ = z_plus_target: kx*ky*E(kx,ky) for uu, vv, ww, uw
+
+  # NOTE: Statistics are accumulated as running sums. The state_file contains:
+  #   - All running sums (not yet divided by n_samples)
+  #   - n_samples: number of snapshots accumulated
+  # This allows restarting statistics collection after preemption without losing progress!
