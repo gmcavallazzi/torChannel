@@ -139,8 +139,9 @@ def solve_poisson_fft(div, fft_data):
     p_interior = torch.fft.irfft2(p_hat, s=(nx, ny), dim=(0, 1))
 
     # Use preallocated workspace (GPU optimization - avoids allocation every timestep)
+    # No zero_() needed: every element is explicitly written before being read
+    # (interior by line below, ghost cells by periodic/wall BCs that follow)
     p = fft_data['workspace_p']
-    p.zero_()  # CRITICAL: Clear workspace before reuse to avoid contamination
 
     # Fill interior
     p[1:nx+1, 1:ny+1, 1:nz+1] = p_interior

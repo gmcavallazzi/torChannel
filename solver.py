@@ -778,13 +778,20 @@ class ChannelFlow:
                 # Compute diagnostics (triggers GPU-CPU sync)
                 div_final = compute_divergence(self.u, self.v, self.w, self.nx, self.ny, self.nz,
                                                 self.dx, self.dy, self.dz_f)
-                max_div = torch.max(torch.abs(div_final)).item()
+                max_div_tensor = torch.max(torch.abs(div_final))
                 u_tau = compute_u_tau(self.u, self.z_c, self.nu, top_wall_bc_type=self.top_wall_bc_type)
 
-                # Convert to scalars for storage
-                u_bulk_scalar = u_bulk.item() if torch.is_tensor(u_bulk) else u_bulk
-                u_tau_scalar = u_tau.item() if torch.is_tensor(u_tau) else u_tau
-                forcing_scalar = forcing.item() if torch.is_tensor(forcing) else forcing
+                # Batch GPU-CPU transfer: collect all diagnostic scalars and transfer once
+                # This reduces ~4 GPU-CPU sync points to 1
+                u_bulk_t = u_bulk if torch.is_tensor(u_bulk) else torch.tensor(u_bulk, device=max_div_tensor.device)
+                u_tau_t = u_tau if torch.is_tensor(u_tau) else torch.tensor(u_tau, device=max_div_tensor.device)
+                forcing_t = forcing if torch.is_tensor(forcing) else torch.tensor(forcing, device=max_div_tensor.device)
+                diag = torch.stack([max_div_tensor, u_bulk_t, u_tau_t, forcing_t])
+                diag_cpu = diag.cpu().tolist()
+                max_div = diag_cpu[0]
+                u_bulk_scalar = diag_cpu[1]
+                u_tau_scalar = diag_cpu[2]
+                forcing_scalar = diag_cpu[3]
 
                 # Collect time series data (pre-allocated array indexing)
                 idx = timeseries_data['index']
@@ -838,8 +845,12 @@ class ChannelFlow:
                 # Compute diagnostics for saving if not already computed this step
                 if step % self.n_out != 0:
                     u_tau = compute_u_tau(self.u, self.z_c, self.nu, top_wall_bc_type=self.top_wall_bc_type)
-                    u_tau_scalar = u_tau.item() if torch.is_tensor(u_tau) else u_tau
-                    forcing_scalar = forcing.item() if torch.is_tensor(forcing) else forcing
+                    # Batch GPU-CPU transfer for save-point diagnostics
+                    u_tau_t = u_tau if torch.is_tensor(u_tau) else torch.tensor(u_tau, device=self.device)
+                    forcing_t = forcing if torch.is_tensor(forcing) else torch.tensor(forcing, device=self.device)
+                    save_diag = torch.stack([u_tau_t, forcing_t]).cpu().tolist()
+                    u_tau_scalar = save_diag[0]
+                    forcing_scalar = save_diag[1]
 
                 # Save accumulated time series data to binary file
                 if timeseries_data['index'] > 0:

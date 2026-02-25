@@ -611,7 +611,6 @@ def solve_implicit_diffusion_u(u: torch.Tensor, dt: float, nx: int, ny: int, nz:
 
     Returns updated u with implicit z-diffusion applied.
     """
-    u_new = u.clone()
     alpha = theta * dt * nu  # Implicit part coefficient
 
     # Build tridiagonal coefficients for all k (vectorized)
@@ -620,37 +619,22 @@ def solve_implicit_diffusion_u(u: torch.Tensor, dt: float, nx: int, ny: int, nz:
     dz_right = dz_c[1:nz+1]  # Spacing from k to k+1
     dz_cell = dz_f[0:nz]     # Cell height at k
 
-    # Tridiagonal coefficients (interior formula)
-    coeff_lower = -alpha / (dz_left * dz_cell)  # a[k]
-    coeff_center = 1.0 + alpha * (1.0/dz_left + 1.0/dz_right) / dz_cell  # b[k]
-    coeff_upper = -alpha / (dz_right * dz_cell)  # c[k]
-
-    # Build tridiagonal matrix with boundary conditions
-    # Shape: (nz,) for each diagonal
-    a = coeff_lower.clone()
-    b = coeff_center.clone()
-    c = coeff_upper.clone()
+    # Build tridiagonal matrix with boundary conditions directly
+    # These are fresh tensors from arithmetic (not views), safe to modify in-place
+    a = -alpha / (dz_left * dz_cell)  # a[k] = coeff_lower
+    b = 1.0 + alpha * (1.0/dz_left + 1.0/dz_right) / dz_cell  # b[k] = coeff_center
+    c = -alpha / (dz_right * dz_cell)  # c[k] = coeff_upper
 
     # Bottom boundary (k=0): u[0] = -u[1] (no-slip at z=0)
-    # The ghost cell u[0] is eliminated: u[0] = -u[1]
-    # This modifies only the diagonal coefficient, upper coupling stays the same
+    b[0] = b[0] - a[0]  # Modified diagonal: adds 2*coeff_lower effect
     a[0] = 0.0  # No coupling to point below (it's been eliminated)
-    b[0] = coeff_center[0] - coeff_lower[0]  # Modified diagonal: adds 2*coeff_lower effect
-    # c[0] remains unchanged (coeff_upper[0])
 
     # Top boundary (k=nz-1): depends on BC type
     if top_wall_bc_type == 'neumann':
-        # Free-slip: u[nz] = u[nz-1] (Neumann BC: du/dz = 0)
-        # Ghost cell u[nz] is eliminated: u[nz] = u[nz-1]
-        # d2u/dz2 term: (u[nz]-u[nz-1])/dz_right becomes 0
-        # In tridiagonal system: -alpha * u[nz] becomes -alpha * u[nz-1]
-        # This adds to the diagonal term
-        b[nz-1] = coeff_center[nz-1] + coeff_upper[nz-1]
+        b[nz-1] = b[nz-1] + c[nz-1]
     else:
-        # No-slip: u[nz] = -u[nz-1] (Dirichlet BC: u = 0)
-        # Ghost cell u[nz] is eliminated: u[nz] = -u[nz-1]
-        b[nz-1] = coeff_center[nz-1] - coeff_upper[nz-1]
-        
+        b[nz-1] = b[nz-1] - c[nz-1]
+
     c[nz-1] = 0.0  # No coupling to point above (it's been eliminated)
 
     # RHS: u at current time step
@@ -694,10 +678,10 @@ def solve_implicit_diffusion_u(u: torch.Tensor, dt: float, nx: int, ny: int, nz:
     d_batch = d.reshape(nx*ny, nz)
     x_batch = solve_tridiagonal_batch(a, b, c, d_batch)
 
-    # Reshape back and assign
-    u_new[1:nx+1, 1:ny+1, 1:nz+1] = x_batch.reshape(nx, ny, nz)
+    # Reshape back and assign directly into u (avoids full-tensor clone)
+    u[1:nx+1, 1:ny+1, 1:nz+1] = x_batch.reshape(nx, ny, nz)
 
-    return u_new
+    return u
 
 
 @torch.jit.script
@@ -717,35 +701,27 @@ def solve_implicit_diffusion_v(v: torch.Tensor, dt: float, nx: int, ny: int, nz:
 
     Returns updated v with implicit z-diffusion applied.
     """
-    v_new = v.clone()
     alpha = theta * dt * nu  # Implicit part coefficient
 
-    # Build tridiagonal coefficients (same as u-component)
+    # Build tridiagonal coefficients directly (no clone needed — fresh tensors)
     dz_left = dz_c[0:nz]
     dz_right = dz_c[1:nz+1]
     dz_cell = dz_f[0:nz]
 
-    coeff_lower = -alpha / (dz_left * dz_cell)
-    coeff_center = 1.0 + alpha * (1.0/dz_left + 1.0/dz_right) / dz_cell
-    coeff_upper = -alpha / (dz_right * dz_cell)
-
-    a = coeff_lower.clone()
-    b = coeff_center.clone()
-    c = coeff_upper.clone()
+    a = -alpha / (dz_left * dz_cell)
+    b = 1.0 + alpha * (1.0/dz_left + 1.0/dz_right) / dz_cell
+    c = -alpha / (dz_right * dz_cell)
 
     # Bottom boundary (k=0): v[0] = -v[1] (no-slip at z=0)
+    b[0] = b[0] - a[0]
     a[0] = 0.0
-    b[0] = coeff_center[0] - coeff_lower[0]
-    # c[0] unchanged
 
     # Top boundary (k=nz-1): depends on BC type
     if top_wall_bc_type == 'neumann':
-        # Free-slip: v[nz] = v[nz-1] (Neumann BC: dv/dz = 0)
-        b[nz-1] = coeff_center[nz-1] + coeff_upper[nz-1]
+        b[nz-1] = b[nz-1] + c[nz-1]
     else:
-        # No-slip: v[nz] = -v[nz-1] (Dirichlet BC: v = 0)
-        b[nz-1] = coeff_center[nz-1] - coeff_upper[nz-1]
-        
+        b[nz-1] = b[nz-1] - c[nz-1]
+
     c[nz-1] = 0.0
 
     # RHS: v at current time step
@@ -787,9 +763,10 @@ def solve_implicit_diffusion_v(v: torch.Tensor, dt: float, nx: int, ny: int, nz:
     d_batch = d.reshape(nx*ny, nz)
     x_batch = solve_tridiagonal_batch(a, b, c, d_batch)
 
-    v_new[1:nx+1, 1:ny+1, 1:nz+1] = x_batch.reshape(nx, ny, nz)
+    # Write result directly into v (avoids full-tensor clone)
+    v[1:nx+1, 1:ny+1, 1:nz+1] = x_batch.reshape(nx, ny, nz)
 
-    return v_new
+    return v
 
 
 @torch.jit.script
@@ -811,36 +788,25 @@ def solve_implicit_diffusion_w(w: torch.Tensor, dt: float, nx: int, ny: int, nz:
 
     Returns updated w with implicit z-diffusion applied.
     """
-    w_new = w.clone()
     alpha = theta * dt * nu  # Implicit part coefficient
 
     # w has (nz-1) interior points in z-direction
     n_interior = nz - 1
 
-    # Build tridiagonal coefficients for w (staggered in z)
-    # w[k] lives at z-faces, different from u/v
-    # Use dz_f for spacing between w-points, dz_c for cell centers
+    # Build tridiagonal coefficients directly (no clone needed — fresh tensors)
     dz_left = dz_f[0:n_interior]      # Spacing to left
     dz_right = dz_f[1:nz]              # Spacing to right
     dz_cv = dz_c[1:nz]                 # Cell center spacing
 
-    coeff_lower = -alpha / (dz_left * dz_cv)
-    coeff_center = 1.0 + alpha * (1.0/dz_left + 1.0/dz_right) / dz_cv
-    coeff_upper = -alpha / (dz_right * dz_cv)
-
-    a = coeff_lower.clone()
-    b = coeff_center.clone()
-    c = coeff_upper.clone()
+    a = -alpha / (dz_left * dz_cv)
+    b = 1.0 + alpha * (1.0/dz_left + 1.0/dz_right) / dz_cv
+    c = -alpha / (dz_right * dz_cv)
 
     # Bottom boundary (k=0): w[0] = 0 (impermeability at z=0, Dirichlet BC)
-    # Since w[0]=0, there's no coupling to point below
     a[0] = 0.0
-    # b[0] and c[0] remain unchanged
 
     # Top boundary (k=nz-2, last interior point): w[nz] = 0 (impermeability at z=Lz, Dirichlet BC)
-    # Since w[nz]=0, there's no coupling to point above
     c[n_interior-1] = 0.0
-    # a[n_interior-1] and b[n_interior-1] remain unchanged
 
     # RHS: w at current time step
     d = w[1:nx+1, 1:ny+1, 1:nz].clone()
@@ -873,9 +839,10 @@ def solve_implicit_diffusion_w(w: torch.Tensor, dt: float, nx: int, ny: int, nz:
     d_batch = d.reshape(nx*ny, n_interior)
     x_batch = solve_tridiagonal_batch(a, b, c, d_batch)
 
-    w_new[1:nx+1, 1:ny+1, 1:nz] = x_batch.reshape(nx, ny, n_interior)
+    # Write result directly into w (avoids full-tensor clone)
+    w[1:nx+1, 1:ny+1, 1:nz] = x_batch.reshape(nx, ny, n_interior)
 
-    return w_new
+    return w
 
 
 # ==============================================================================
