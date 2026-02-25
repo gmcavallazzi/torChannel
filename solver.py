@@ -9,7 +9,7 @@ from operators import diffusion_u, diffusion_v, diffusion_w, advection_u, advect
 from projection import build_poisson_matrix, solve_poisson, project_velocity
 from projection_fft import initialize_fft_solver, solve_poisson_fft
 from statistics import TurbulenceStats
-from ibm import IBM_RKPM
+
 
 @torch.jit.script
 def apply_bc_all(u: torch.Tensor, v: torch.Tensor, w: torch.Tensor, top_wall_bc_type: str = 'dirichlet') -> None:
@@ -324,45 +324,6 @@ class ChannelFlow:
             self.turbulence_stats = None
             print(f"\nStatistics collection disabled (n_stats = 0)", flush=True)
 
-        # Initialize IBM if enabled
-        self.ibm_enabled = config.get('ibm', {}).get('enabled', False)
-        if self.ibm_enabled:
-            print(f"\nInitializing Immersed Boundary Method...", flush=True)
-
-            # IBM stability parameters
-            ibm_config = config.get('ibm', {})
-            self.ibm_relaxation = ibm_config.get('relaxation', 1.0)
-            self.ibm_ramp_steps = ibm_config.get('ramp_steps', 0)
-
-            print(f"  IBM relaxation factor: {self.ibm_relaxation}", flush=True)
-            print(f"  IBM force ramping: {self.ibm_ramp_steps} steps", flush=True)
-
-            # Generate grid coordinates for IBM
-            # x_c: cell centers, x_f: cell faces
-            x_c = np.linspace(self.dx/2, self.Lx - self.dx/2, self.nx)
-            x_f = np.linspace(0, self.Lx, self.nx + 1)
-            y_c = np.linspace(self.dy/2, self.Ly - self.dy/2, self.ny)
-            y_f = np.linspace(0, self.Ly, self.ny + 1)
-
-            # z coordinates are already available as tensors, convert to numpy for IBM init
-            z_c_np = self.z_c[1:-1].cpu().numpy() # Strip ghost cells
-            z_f_np = self.z_f.cpu().numpy()
-            dz_c_np = self.dz_c.cpu().numpy()
-            dz_f_np = self.dz_f.cpu().numpy()
-
-            grid_data = {
-                'x_c': x_c, 'x_f': x_f,
-                'y_c': y_c, 'y_f': y_f,
-                'z_c': z_c_np, 'z_f': z_f_np,
-                'dz_c': dz_c_np, 'dz_f': dz_f_np,
-                'dx': self.dx, 'dy': self.dy
-            }
-
-            self.ibm = IBM_RKPM(config, grid_data, device=self.device)
-            print("IBM initialized successfully.", flush=True)
-        else:
-            self.ibm = None
-
         # Save initial fields
         u_tau_init = compute_u_tau(self.u, self.z_c, self.nu, top_wall_bc_type=self.top_wall_bc_type)
         save_flow_fields(self.u, self.v, self.w, self.p, self.z_c, self.z_f,
@@ -543,40 +504,6 @@ class ChannelFlow:
         # Compute RHS (diffusion - advection)
         rhs_u, rhs_v, rhs_w = self.compute_momentum_rhs_explicit()
 
-        # === IBM PREDICTOR-CORRECTOR (Euler) ===
-        if self.ibm:
-            # 1. Predictor: u_pred = u + dt * RHS_phys
-            u_pred = self.u + dt * rhs_u
-            v_pred = self.v + dt * rhs_v
-            w_pred = self.w + dt * rhs_w
-            apply_bc_all(u_pred, v_pred, w_pred, self.top_wall_bc_type)
-
-            # 2. Force
-            u_lag = self.ibm.interpolate(u_pred[:, 1:-1, 1:-1], 'u')
-            v_lag = self.ibm.interpolate(v_pred[1:-1, :, 1:-1], 'v')
-            w_lag = self.ibm.interpolate(w_pred[1:-1, 1:-1, :], 'w')
-
-            # Apply relaxation for stability
-            alpha = self.ibm_relaxation
-
-            # Apply force ramping for smooth startup
-            if self.ibm_ramp_steps > 0 and self.current_step <= self.ibm_ramp_steps:
-                ramp_factor = self.current_step / self.ibm_ramp_steps
-                alpha = alpha * ramp_factor
-
-            f_u_lag = alpha * (0.0 - u_lag) / dt
-            f_v_lag = alpha * (0.0 - v_lag) / dt
-            f_w_lag = alpha * (0.0 - w_lag) / dt
-
-            f_u_euler = self.ibm.spread(f_u_lag, 'u')
-            f_v_euler = self.ibm.spread(f_v_lag, 'v')
-            f_w_euler = self.ibm.spread(f_w_lag, 'w')
-
-            # 3. Add to RHS
-            rhs_u[:, 1:-1, 1:-1] += f_u_euler
-            rhs_v[1:-1, :, 1:-1] += f_v_euler
-            rhs_w[1:-1, 1:-1, :] += f_w_euler
-
         # Forward Euler time stepping: u = u + dt * RHS
         self.u += dt * rhs_u
         self.v += dt * rhs_v
@@ -586,7 +513,6 @@ class ChannelFlow:
         # u_bulk_current = compute_bulk_velocity(self.u, self.cell_vol_ratio, self.total_volume)
         # forcing = (self.U_bulk - u_bulk_current) / dt
         
-        # DEBUG: Constant forcing to isolate IBM instability
         forcing = 1.0
         
         self.u[1:self.nx+1, 1:self.ny+1, 1:self.nz+1] += dt * forcing
@@ -673,97 +599,17 @@ class ChannelFlow:
             self.rhs_v_curr[:] = rhs_v_explicit
             self.rhs_w_curr[:] = rhs_w_explicit
 
-        # Predictor velocity (u_pred)
-        # Initialize with current velocity
-        u_pred = self.u.clone()
-        v_pred = self.v.clone()
-        w_pred = self.w.clone()
-
-        if self.ibm:
-            # Use AB2 for predictor to match Fortran scheme (.susa)
-            # Predictor: u_pred = u^n + dt * AB2(RHS_phys^n, RHS_phys^{n-1})
-            if self.rhs_u_prev is None:
-                # First step: use Euler
-                u_pred += dt * self.rhs_u_curr
-                v_pred += dt * self.rhs_v_curr
-                w_pred += dt * self.rhs_w_curr
-            else:
-                # AB2: u_pred = u + dt * (1.5 * RHS^n - 0.5 * RHS^{n-1})
-                u_pred += dt * (1.5 * self.rhs_u_curr - 0.5 * self.rhs_u_prev)
-                v_pred += dt * (1.5 * self.rhs_v_curr - 0.5 * self.rhs_v_prev)
-                w_pred += dt * (1.5 * self.rhs_w_curr - 0.5 * self.rhs_w_prev)
-
-            # Predictor Step: Implicit part (z-diffusion)
-            apply_bc_all(u_pred, v_pred, w_pred, self.top_wall_bc_type)
-            u_pred = solve_implicit_diffusion_u(u_pred, dt, self.nx, self.ny, self.nz, self.dz_c, self.dz_f, self.nu, top_wall_bc_type=self.top_wall_bc_type)
-            v_pred = solve_implicit_diffusion_v(v_pred, dt, self.nx, self.ny, self.nz, self.dz_c, self.dz_f, self.nu, top_wall_bc_type=self.top_wall_bc_type)
-            w_pred = solve_implicit_diffusion_w(w_pred, dt, self.nx, self.ny, self.nz, self.dz_c, self.dz_f, self.nu)
-            apply_bc_all(u_pred, v_pred, w_pred, self.top_wall_bc_type)
-
-            # 2. Compute IBM Force
-            # Slice to match IBM grid dimensions (physical domain)
-            # u: (nx+1, ny, nz) -> [:, 1:-1, 1:-1] (No ghosts in X)
-            # v: (nx, ny+1, nz) -> [1:-1, :, 1:-1] (Ghosts in X, No ghosts in Y)
-            # w: (nx, ny, nz+1) -> [1:-1, 1:-1, :] (Ghosts in X, Ghosts in Y, No ghosts in Z)
-            
-            u_lag = self.ibm.interpolate(u_pred[:, 1:-1, 1:-1], 'u')
-            v_lag = self.ibm.interpolate(v_pred[1:-1, :, 1:-1], 'v')
-            w_lag = self.ibm.interpolate(w_pred[1:-1, 1:-1, :], 'w')
-
-            # Compute forcing: f_lag = alpha * (0 - u_pred) / dt
-            # Apply relaxation for stability
-            alpha = self.ibm_relaxation
-
-            # Apply force ramping for smooth startup
-            if self.ibm_ramp_steps > 0 and self.current_step <= self.ibm_ramp_steps:
-                ramp_factor = self.current_step / self.ibm_ramp_steps
-                alpha = alpha * ramp_factor
-
-            f_u_lag = alpha * (0.0 - u_lag) / dt
-            f_v_lag = alpha * (0.0 - v_lag) / dt
-            f_w_lag = alpha * (0.0 - w_lag) / dt
-
-            # Spread forcing to Eulerian grid
-            f_u_euler = self.ibm.spread(f_u_lag, 'u')
-            f_v_euler = self.ibm.spread(f_v_lag, 'v')
-            f_w_euler = self.ibm.spread(f_w_lag, 'w')
-
-            # 3. Apply Force (Corrector)
-            # CRITICAL FIX: Decouple IBM force from AB2 history.
-            # The IBM force is a stiff constraint force that must be applied based on the CURRENT state.
-            # Including it in the AB2 history (which contains large forces from previous steps)
-            # causes "memory" effects that kick the velocity away from the interface (oscillation).
-            # We apply physical terms with AB2, and IBM force with Forward Euler.
-            
-            # First, apply the physical update (AB2)
-            if self.rhs_u_prev is None:
-                self.u += dt * self.rhs_u_curr
-                self.v += dt * self.rhs_v_curr
-                self.w += dt * self.rhs_w_curr
-            else:
-                self.u += dt * (1.5 * self.rhs_u_curr - 0.5 * self.rhs_u_prev)
-                self.v += dt * (1.5 * self.rhs_v_curr - 0.5 * self.rhs_v_prev)
-                self.w += dt * (1.5 * self.rhs_w_curr - 0.5 * self.rhs_w_prev)
-
-            # Then, apply IBM force (Explicit Euler)
-            # Apply to physical faces matching the interpolation slice
-            self.u[:, 1:-1, 1:-1] += dt * f_u_euler
-            self.v[1:-1, :, 1:-1] += dt * f_v_euler
-            self.w[1:-1, 1:-1, :] += dt * f_w_euler
-
+        # Standard AB2
+        if self.rhs_u_prev is None:
+            self.u += dt * self.rhs_u_curr
+            self.v += dt * self.rhs_v_curr
+            self.w += dt * self.rhs_w_curr
         else:
-            # No IBM, standard AB2
-            if self.rhs_u_prev is None:
-                self.u += dt * self.rhs_u_curr
-                self.v += dt * self.rhs_v_curr
-                self.w += dt * self.rhs_w_curr
-            else:
-                self.u += dt * (1.5 * self.rhs_u_curr - 0.5 * self.rhs_u_prev)
-                self.v += dt * (1.5 * self.rhs_v_curr - 0.5 * self.rhs_v_prev)
-                self.w += dt * (1.5 * self.rhs_w_curr - 0.5 * self.rhs_w_prev)
+            self.u += dt * (1.5 * self.rhs_u_curr - 0.5 * self.rhs_u_prev)
+            self.v += dt * (1.5 * self.rhs_v_curr - 0.5 * self.rhs_v_prev)
+            self.w += dt * (1.5 * self.rhs_w_curr - 0.5 * self.rhs_w_prev)
 
         # Swap buffers: prev <- curr (pointer swap, no memory allocation)
-        # rhs_u_curr contains the CLEAN RHS (without IBM force)
         self.rhs_u_prev, self.rhs_u_curr = self.rhs_u_curr, self.rhs_u_prev
         self.rhs_v_prev, self.rhs_v_curr = self.rhs_v_curr, self.rhs_v_prev
         self.rhs_w_prev, self.rhs_w_curr = self.rhs_w_curr, self.rhs_w_prev
@@ -913,12 +759,6 @@ class ChannelFlow:
                 print(f"  Wall-time: {elapsed:.2f}s (last {10*self.n_out} steps), {total_elapsed:.2f}s (total)", flush=True)
                 last_walltime_print = current_time
 
-            # Print IBM ramping progress (only during ramp-up phase)
-            if self.ibm_enabled and self.ibm_ramp_steps > 0 and step <= self.ibm_ramp_steps and step % self.n_out == 0:
-                ramp_factor = step / self.ibm_ramp_steps
-                effective_alpha = self.ibm_relaxation * ramp_factor
-                print(f"  [IBM] Ramping: step {step}/{self.ibm_ramp_steps}, alpha_eff = {effective_alpha:.3f}", flush=True)
-            
             # Adaptive timestep: update dt based on CFL condition
             if self.dt_update_interval > 0 and step % self.dt_update_interval == 0 and step > 0:
                 dt_new = self.compute_cfl_dt()

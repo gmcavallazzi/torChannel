@@ -387,16 +387,6 @@ def main():
         with open(args.config, 'r') as f:
             config = yaml.safe_load(f)
 
-        # Get sphere parameters if present
-        if config.get('ibm', {}).get('enabled', False) and \
-           config['ibm'].get('obstacle_type') == 'sphere':
-            sphere_config = config['ibm']['sphere']
-            sphere_params = {
-                'center': sphere_config['center'],
-                'radius': sphere_config['radius']
-            }
-            print(f"Sphere detected: center={sphere_params['center']}, "
-                  f"radius={sphere_params['radius']}")
     else:
         print(f"WARNING: Config file not found: {args.config}")
 

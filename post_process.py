@@ -567,15 +567,7 @@ def main():
         if args.sphere:
             with open(config_file, 'r') as f:
                 config = yaml.safe_load(f)
-            if config.get('ibm', {}).get('enabled', False) and config['ibm'].get('obstacle_type') == 'sphere':
-                sphere_config = config['ibm']['sphere']
-                sphere_params = {
-                    'center': sphere_config['center'],
-                    'radius': sphere_config['radius']
-                }
-                print(f"Sphere overlay enabled: center={sphere_params['center']}, radius={sphere_params['radius']}")
-            else:
-                print("WARNING: --sphere flag used but sphere obstacle not configured in config file")
+            print("WARNING: --sphere flag is no longer supported (IBM removed)")
 
         # Plot field data
         u, v, w, p, z_c, z_f, Lx, Ly, time, step = load_fields(field_file)
