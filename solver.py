@@ -273,8 +273,7 @@ class ChannelFlow:
 
         if self.solver_type == 'direct':
             self.poisson_matrix = build_poisson_matrix(self.nx, self.ny, self.nz,
-                                                         self.dx, self.dy, self.dz_c, self.dz_f,
-                                                         top_wall_bc_type=self.top_wall_bc_type)
+                                                         self.dx, self.dy, self.dz_c, self.dz_f)
             # print_poisson_matrix(self.poisson_matrix, self.nx, self.ny, self.nz, self.results_folder)
         elif self.solver_type == 'fft':
             # Initialize FFT-based Poisson solver
@@ -313,7 +312,8 @@ class ChannelFlow:
                 self.z_c, self.z_f, self.dz_c, self.dz_f,
                 self.dx, self.dy, self.nu,
                 self.Re_tau, z_plus_target=z_plus_target,
-                device=self.device
+                device=self.device,
+                top_wall_bc_type=self.top_wall_bc_type
             )
 
             # Load statistics state if restarting
@@ -343,7 +343,7 @@ class ChannelFlow:
         # So we solve ∇²p = div
         
         if self.solver_type == 'direct':
-            self.p = solve_poisson(self.poisson_matrix, div, self.nx, self.ny, self.nz, self.top_wall_bc_type)
+            self.p = solve_poisson(self.poisson_matrix, div, self.nx, self.ny, self.nz)
         elif self.solver_type == 'fft':
             self.p = solve_poisson_fft(div, self.fft_data)
             
@@ -527,7 +527,7 @@ class ChannelFlow:
         
         # Step 2: Solve Poisson equation for pressure: ∇²p = div/dt
         if self.solver_type == 'direct':
-            self.p = solve_poisson(self.poisson_matrix, div / dt, self.nx, self.ny, self.nz, self.top_wall_bc_type)
+            self.p = solve_poisson(self.poisson_matrix, div / dt, self.nx, self.ny, self.nz)
         elif self.solver_type == 'fft':
             self.p = solve_poisson_fft(div / dt, self.fft_data)
 
@@ -634,7 +634,7 @@ class ChannelFlow:
 
         # Step 2: Solve Poisson equation for pressure: ∇²p = div/dt
         if self.solver_type == 'direct':
-            self.p = solve_poisson(self.poisson_matrix, div / dt, self.nx, self.ny, self.nz, self.top_wall_bc_type)
+            self.p = solve_poisson(self.poisson_matrix, div / dt, self.nx, self.ny, self.nz)
         elif self.solver_type == 'fft':
             self.p = solve_poisson_fft(div / dt, self.fft_data)
 

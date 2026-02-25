@@ -1,16 +1,13 @@
 import torch
 
-def build_poisson_matrix(nx, ny, nz, dx, dy, dz_c, dz_f, pin_pressure=True, top_wall_bc_type='dirichlet'):
+def build_poisson_matrix(nx, ny, nz, dx, dy, dz_c, dz_f, pin_pressure=True):
     """
     Build Laplacian matrix for Poisson equation: ∇²p = div/dt
 
     Grid: nx×ny×nz interior cells
-    BCs: Periodic in x,y; Variable in z
-    - Bottom wall: always Neumann (dp/dz=0) for pressure
-    - Top wall: Neumann (dp/dz=0) or Dirichlet (p=0) based on top_wall_bc_type
-
-    Args:
-        top_wall_bc_type: 'dirichlet' (no-slip velocity) or 'neumann' (free-slip velocity)
+    BCs: Periodic in x,y; Neumann (dp/dz=0) at both walls in z
+    Both walls always use Neumann pressure BC because the normal momentum
+    equation at a rigid wall (whether no-slip or free-slip) gives dp/dz=0.
 
     Indexing: idx = (i-1) + (j-1)*nx + (k-1)*nx*ny
     where i,j,k ∈ [1, nx]×[1, ny]×[1, nz]
@@ -84,13 +81,13 @@ def build_poisson_matrix(nx, ny, nz, dx, dy, dz_c, dz_f, pin_pressure=True, top_
     return A
 
 
-def solve_poisson(A, div, nx, ny, nz, top_wall_bc_type='dirichlet'):
+def solve_poisson(A, div, nx, ny, nz):
     """
     Solve Ap = b for pressure.
     Returns p with ghost cells.
 
-    Args:
-        top_wall_bc_type: 'dirichlet' (no-slip velocity) or 'neumann' (free-slip velocity)
+    Both walls use Neumann pressure BC (dp/dz=0) because the normal momentum
+    equation at a rigid wall (whether no-slip or free-slip) gives dp/dz=0.
 
     Note: Matrix A uses index ordering where i varies fastest: idx = (i-1) + (j-1)*nx + (k-1)*nx*ny
     PyTorch reshape uses C-order where k varies fastest.
@@ -128,14 +125,11 @@ def solve_poisson(A, div, nx, ny, nz, top_wall_bc_type='dirichlet'):
     p[:, 0, :] = p[:, ny, :]
     p[:, ny+1, :] = p[:, 1, :]
 
-    # BC in z: bottom wall always Neumann, top wall depends on BC type
-    p[:, :, 0] = p[:, :, 1]  # Bottom: Neumann (dp/dz = 0)
-    if top_wall_bc_type == 'neumann':
-        # Free-slip velocity BC → Dirichlet pressure BC (p = 0)
-        p[:, :, nz+1] = 0.0
-    else:  # 'dirichlet'
-        # No-slip velocity BC → Neumann pressure BC (dp/dz = 0)
-        p[:, :, nz+1] = p[:, :, nz]
+    # Both walls: Neumann pressure BC (dp/dz = 0)
+    # This is correct for both no-slip and free-slip velocity BCs because
+    # the normal momentum equation at a rigid wall gives dp/dz = 0.
+    p[:, :, 0] = p[:, :, 1]
+    p[:, :, nz+1] = p[:, :, nz]
 
     return p
 

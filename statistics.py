@@ -18,7 +18,8 @@ class TurbulenceStats:
     """
 
     def __init__(self, nx, ny, nz, Lx, Ly, Lz, z_c, z_f, dz_c, dz_f,
-                 dx, dy, nu, Re_tau_target, z_plus_target=15.0, device='cpu'):
+                 dx, dy, nu, Re_tau_target, z_plus_target=15.0, device='cpu',
+                 top_wall_bc_type='dirichlet'):
         """
         Initialize statistics accumulator.
 
@@ -32,6 +33,7 @@ class TurbulenceStats:
             Re_tau_target: Target friction Reynolds number (for z+ calculation)
             z_plus_target: Target height in wall units for 2D spectra
             device: 'cpu' or 'cuda'
+            top_wall_bc_type: 'dirichlet' (full channel) or 'neumann' (half channel)
         """
         self.nx = nx
         self.ny = ny
@@ -47,14 +49,15 @@ class TurbulenceStats:
         self.dy = dy
         self.nu = nu
         self.device = device
+        self.top_wall_bc_type = top_wall_bc_type
+        self.half_channel = (top_wall_bc_type == 'neumann')
 
         # Compute target u_tau and find z+ grid indices
-        delta = Lz / 2.0  # Half-channel height
+        # For half-channel (neumann top), the domain IS the half-channel already
+        delta = Lz if self.half_channel else Lz / 2.0
         self.u_tau_target = Re_tau_target * nu / delta
 
         # Find grid indices closest to z_plus_target from each wall
-        # Bottom wall: z = 0, find z_c closest to z_plus_target * nu / u_tau_target
-        # Top wall: z = Lz, find z_c closest to Lz - z_plus_target * nu / u_tau_target
         z_target_phys = z_plus_target * nu / self.u_tau_target
 
         # Interior z_c points (excluding ghost cells)
@@ -64,14 +67,18 @@ class TurbulenceStats:
         idx_bot = torch.argmin(torch.abs(z_c_interior - z_target_phys)).item()
         self.k_bot = idx_bot + 1  # Offset by 1 for ghost cell
 
-        # Find index for top wall (closest to Lz - z_target_phys)
-        idx_top = torch.argmin(torch.abs(z_c_interior - (Lz - z_target_phys))).item()
-        self.k_top = idx_top + 1  # Offset by 1 for ghost cell
-
         print(f"\nStatistics initialization:", flush=True)
         print(f"  Target z+ = {z_plus_target:.1f}", flush=True)
         print(f"  Bottom wall: z_c[{self.k_bot}] = {z_c[self.k_bot]:.6f}, z+ = {z_c[self.k_bot] * self.u_tau_target / nu:.1f}", flush=True)
-        print(f"  Top wall: z_c[{self.k_top}] = {z_c[self.k_top]:.6f}, z+ = {(Lz - z_c[self.k_top]) * self.u_tau_target / nu:.1f}", flush=True)
+
+        if not self.half_channel:
+            # Find index for top wall (closest to Lz - z_target_phys)
+            idx_top = torch.argmin(torch.abs(z_c_interior - (Lz - z_target_phys))).item()
+            self.k_top = idx_top + 1  # Offset by 1 for ghost cell
+            print(f"  Top wall: z_c[{self.k_top}] = {z_c[self.k_top]:.6f}, z+ = {(Lz - z_c[self.k_top]) * self.u_tau_target / nu:.1f}", flush=True)
+        else:
+            self.k_top = None
+            print(f"  Half-channel mode: no top wall spectra", flush=True)
 
         # Sample counter
         self.n_samples = 0
@@ -148,29 +155,15 @@ class TurbulenceStats:
         self.uw_sum += uw
 
         # Compute 2D premultiplied spectra at z+ locations
-        # Extract planes at k_bot and k_top
-        # Average between both walls
-
         # Bottom wall plane
         u_bot = u_fluct[:, :, self.k_bot - 1]  # (nx, ny)
         v_bot = v_fluct[:, :, self.k_bot - 1]
         w_bot = w_fluct[:, :, self.k_bot - 1]
 
-        # Top wall plane
-        u_top = u_fluct[:, :, self.k_top - 1]
-        v_top = v_fluct[:, :, self.k_top - 1]
-        w_top = w_fluct[:, :, self.k_top - 1]
-
-        # Compute 2D FFTs for both walls separately
+        # Compute 2D FFTs for bottom wall
         u_fft_bot = torch.fft.rfft2(u_bot)
         v_fft_bot = torch.fft.rfft2(v_bot)
         w_fft_bot = torch.fft.rfft2(w_bot)
-
-        # For top wall, negate w to account for coordinate system (z points into wall)
-        # This is crucial for uw correlation
-        u_fft_top = torch.fft.rfft2(u_top)
-        v_fft_top = torch.fft.rfft2(v_top)
-        w_fft_top = torch.fft.rfft2(-w_top)
 
         # Compute energy spectra for bottom wall
         E_uu_bot = torch.abs(u_fft_bot)**2 / (self.nx * self.ny)**2
@@ -178,17 +171,32 @@ class TurbulenceStats:
         E_ww_bot = torch.abs(w_fft_bot)**2 / (self.nx * self.ny)**2
         E_uw_bot = (u_fft_bot * torch.conj(w_fft_bot)).real / (self.nx * self.ny)**2
 
-        # Compute energy spectra for top wall
-        E_uu_top = torch.abs(u_fft_top)**2 / (self.nx * self.ny)**2
-        E_vv_top = torch.abs(v_fft_top)**2 / (self.nx * self.ny)**2
-        E_ww_top = torch.abs(w_fft_top)**2 / (self.nx * self.ny)**2
-        E_uw_top = (u_fft_top * torch.conj(w_fft_top)).real / (self.nx * self.ny)**2
+        if self.half_channel:
+            # Half-channel: use bottom wall spectra only
+            E_uu_2d = E_uu_bot
+            E_vv_2d = E_vv_bot
+            E_ww_2d = E_ww_bot
+            E_uw_2d = E_uw_bot
+        else:
+            # Full channel: average spectra from both walls
+            u_top = u_fluct[:, :, self.k_top - 1]
+            v_top = v_fluct[:, :, self.k_top - 1]
+            w_top = w_fluct[:, :, self.k_top - 1]
 
-        # Average the spectra (no flips needed for auto-spectra)
-        E_uu_2d = 0.5 * (E_uu_bot + E_uu_top)
-        E_vv_2d = 0.5 * (E_vv_bot + E_vv_top)
-        E_ww_2d = 0.5 * (E_ww_bot + E_ww_top)
-        E_uw_2d = 0.5 * (E_uw_bot + E_uw_top)
+            # For top wall, negate w to account for coordinate system (z points into wall)
+            u_fft_top = torch.fft.rfft2(u_top)
+            v_fft_top = torch.fft.rfft2(v_top)
+            w_fft_top = torch.fft.rfft2(-w_top)
+
+            E_uu_top = torch.abs(u_fft_top)**2 / (self.nx * self.ny)**2
+            E_vv_top = torch.abs(v_fft_top)**2 / (self.nx * self.ny)**2
+            E_ww_top = torch.abs(w_fft_top)**2 / (self.nx * self.ny)**2
+            E_uw_top = (u_fft_top * torch.conj(w_fft_top)).real / (self.nx * self.ny)**2
+
+            E_uu_2d = 0.5 * (E_uu_bot + E_uu_top)
+            E_vv_2d = 0.5 * (E_vv_bot + E_vv_top)
+            E_ww_2d = 0.5 * (E_ww_bot + E_ww_top)
+            E_uw_2d = 0.5 * (E_uw_bot + E_uw_top)
 
         # Keep only positive wavenumbers (skip DC) and fold negative wavenumbers
         # Use symmetric spectrum for negative kx: E(kx) + E(-kx) for kx > 0
@@ -258,10 +266,14 @@ class TurbulenceStats:
         # Distance from wall to first interior cell center
         dz_utau = float(self.z_c[1])  # z_c[1] is first interior point (z_c[0] is ghost)
 
-        # Velocity gradient: average of first points from both walls divided by distance
-        # U_mean_gpu[0]: first interior point from bottom wall
-        # U_mean_gpu[-1]: first interior point from top wall
-        dUdz_wall = float(0.5 * (U_mean_gpu[0] + U_mean_gpu[-1]) / dz_utau)
+        if self.half_channel:
+            # Half-channel: compute from bottom wall only
+            dUdz_wall = float(U_mean_gpu[0] / dz_utau)
+        else:
+            # Full channel: average of first points from both walls
+            # U_mean_gpu[0]: first interior point from bottom wall
+            # U_mean_gpu[-1]: first interior point from top wall
+            dUdz_wall = float(0.5 * (U_mean_gpu[0] + U_mean_gpu[-1]) / dz_utau)
 
         # Compute u_tau from wall shear stress: tau_wall = nu * dU/dz|_wall = u_tau^2
         u_tau_computed = float(np.sqrt(self.nu * dUdz_wall))
@@ -294,7 +306,7 @@ class TurbulenceStats:
             'E_ww_2d': E_ww_2d,
             'E_uw_2d': E_uw_2d,
             'z_plus_target': self.k_bot,  # Store for reference
-            'Re_tau_target': self.u_tau_target * (self.Lz / 2) / self.nu,
+            'Re_tau_target': self.u_tau_target * (self.Lz if self.half_channel else self.Lz / 2) / self.nu,
             'nu': self.nu,  # Kinematic viscosity
             'Re': 1.0 / self.nu,  # Reynolds number
             'u_tau': u_tau_computed  # Friction velocity from Reynolds stress
