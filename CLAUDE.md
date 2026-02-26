@@ -34,16 +34,24 @@ There is no test runner framework (no pytest). Tests are standalone scripts run 
 
 **Core modules**:
 - `solver.py` — Main `ChannelFlow` class: time-stepping loop, IMEX/AB2/FE schemes, adaptive dt, restart logic, bulk velocity forcing
-- `operators.py` — Spatial discretization operators (advection, diffusion) on a staggered grid. Uses `@torch.jit.script` for fused GPU kernels
+- `operators.py` — Spatial discretization operators (advection, diffusion) on a staggered grid. Uses `@torch.jit.script` for fused GPU kernels. Includes pluggable tridiagonal solver interface (`_ext` wrappers)
 - `projection_fft.py` — FFT-based Poisson solver for pressure projection (primary solver)
 - `projection.py` — Direct Poisson solver (fallback/testing)
+- `tridiagonal_cusparse.py` — cuSPARSE GPU tridiagonal solver wrapper (ctypes). Optional alternative to the Thomas algorithm
 - `initflow.py` — Flow field initialization (vortices, random, parabolic, laminar, or restart from file)
 - `utils.py` — Grid generation (hyperbolic tangent stretching), I/O, diagnostic utilities
 - `statistics.py` — `TurbulenceStats` class: on-the-fly Reynolds stresses, mean profiles, 2D energy spectra
 
 **Staggered grid layout**: Velocities are staggered (u at x-faces, v at y-faces, w at z-faces). Pressure is cell-centered. Periodic in x,y; wall-bounded in z with no-slip or free-slip BCs.
 
-**Configuration**: YAML files (see `config550.yaml` for Re_τ=550 example). Key sections: `grid`, `domain`, `flow`, `time`, `initialization`, `statistics`.
+**Configuration**: YAML files (see `config550.yaml` for Re_τ=550 example). Key sections: `grid`, `domain`, `flow`, `time`, `initialization`, `statistics`, `solver`.
+
+**Tridiagonal solver**: The `solver.tridiagonal` config option selects the tridiagonal solver used for both implicit z-diffusion and the FFT Poisson solve. Options: `"thomas"` (default, JIT-compiled) or `"cusparse"` (GPU-accelerated via NVIDIA cuSPARSE). Example:
+```yaml
+solver:
+  type: "fft"
+  tridiagonal: "cusparse"  # or "thomas" (default)
+```
 
 **Output**: `.npz` files for fields, timeseries, and statistics checkpoints. Restart is supported by pointing `initialization.field_file` to a saved checkpoint.
 

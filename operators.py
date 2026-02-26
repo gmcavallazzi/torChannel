@@ -685,6 +685,62 @@ def solve_implicit_diffusion_u(u: torch.Tensor, dt: float, nx: int, ny: int, nz:
 
 
 @torch.jit.script
+def solve_implicit_diffusion_u_vectorized(u: torch.Tensor, dt: float, nx: int, ny: int, nz: int,
+                                dz_c: torch.Tensor, dz_f: torch.Tensor, nu: float,
+                                theta: float = 0.5, top_wall_bc_type: str = 'dirichlet') -> torch.Tensor:
+    """
+    Vectorized version of solve_implicit_diffusion_u.
+    Replaces the for-k loop with a single vectorized stencil operation.
+    The ghost cells (set by apply_bc_all) encode the BCs, so the standard
+    second-derivative stencil automatically produces correct boundary terms.
+    """
+    alpha = theta * dt * nu
+
+    dz_left = dz_c[0:nz]
+    dz_right = dz_c[1:nz+1]
+    dz_cell = dz_f[0:nz]
+
+    a = -alpha / (dz_left * dz_cell)
+    b = 1.0 + alpha * (1.0/dz_left + 1.0/dz_right) / dz_cell
+    c = -alpha / (dz_right * dz_cell)
+
+    # Bottom boundary (k=0): u[0] = -u[1] (no-slip at z=0)
+    b[0] = b[0] - a[0]
+    a[0] = 0.0
+
+    # Top boundary (k=nz-1)
+    if top_wall_bc_type == 'neumann':
+        b[nz-1] = b[nz-1] + c[nz-1]
+    else:
+        b[nz-1] = b[nz-1] - c[nz-1]
+    c[nz-1] = 0.0
+
+    # RHS
+    d = u[1:nx+1, 1:ny+1, 1:nz+1].clone()
+
+    # Add explicit diffusion term for Crank-Nicolson
+    if theta < 1.0:
+        beta = (1.0 - theta) * dt * nu
+        # u_interior includes ghost cells: shape (nx, ny, nz+2)
+        u_interior = u[1:nx+1, 1:ny+1, :]
+
+        # Vectorized d²u/dz² using ghost cells (which encode BCs)
+        # flux_right[k] = (u[k+2] - u[k+1]) / dz_right[k]  for k=0..nz-1
+        # flux_left[k]  = (u[k+1] - u[k])   / dz_left[k]   for k=0..nz-1
+        # d2u[k] = (flux_right[k] - flux_left[k]) / dz_cell[k]
+        flux_right = (u_interior[:, :, 2:nz+2] - u_interior[:, :, 1:nz+1]) / dz_right.view(1, 1, -1)
+        flux_left  = (u_interior[:, :, 1:nz+1] - u_interior[:, :, 0:nz])   / dz_left.view(1, 1, -1)
+        d2u_all = (flux_right - flux_left) / dz_cell.view(1, 1, -1)
+        d += beta * d2u_all
+
+    d_batch = d.reshape(nx*ny, nz)
+    x_batch = solve_tridiagonal_batch(a, b, c, d_batch)
+    u[1:nx+1, 1:ny+1, 1:nz+1] = x_batch.reshape(nx, ny, nz)
+
+    return u
+
+
+@torch.jit.script
 def solve_implicit_diffusion_v(v: torch.Tensor, dt: float, nx: int, ny: int, nz: int,
                                 dz_c: torch.Tensor, dz_f: torch.Tensor, nu: float,
                                 theta: float = 0.5, top_wall_bc_type: str = 'dirichlet') -> torch.Tensor:
@@ -770,6 +826,51 @@ def solve_implicit_diffusion_v(v: torch.Tensor, dt: float, nx: int, ny: int, nz:
 
 
 @torch.jit.script
+def solve_implicit_diffusion_v_vectorized(v: torch.Tensor, dt: float, nx: int, ny: int, nz: int,
+                                dz_c: torch.Tensor, dz_f: torch.Tensor, nu: float,
+                                theta: float = 0.5, top_wall_bc_type: str = 'dirichlet') -> torch.Tensor:
+    """
+    Vectorized version of solve_implicit_diffusion_v.
+    Replaces the for-k loop with a single vectorized stencil operation.
+    """
+    alpha = theta * dt * nu
+
+    dz_left = dz_c[0:nz]
+    dz_right = dz_c[1:nz+1]
+    dz_cell = dz_f[0:nz]
+
+    a = -alpha / (dz_left * dz_cell)
+    b = 1.0 + alpha * (1.0/dz_left + 1.0/dz_right) / dz_cell
+    c = -alpha / (dz_right * dz_cell)
+
+    b[0] = b[0] - a[0]
+    a[0] = 0.0
+
+    if top_wall_bc_type == 'neumann':
+        b[nz-1] = b[nz-1] + c[nz-1]
+    else:
+        b[nz-1] = b[nz-1] - c[nz-1]
+    c[nz-1] = 0.0
+
+    d = v[1:nx+1, 1:ny+1, 1:nz+1].clone()
+
+    if theta < 1.0:
+        beta = (1.0 - theta) * dt * nu
+        v_interior = v[1:nx+1, 1:ny+1, :]
+
+        flux_right = (v_interior[:, :, 2:nz+2] - v_interior[:, :, 1:nz+1]) / dz_right.view(1, 1, -1)
+        flux_left  = (v_interior[:, :, 1:nz+1] - v_interior[:, :, 0:nz])   / dz_left.view(1, 1, -1)
+        d2v_all = (flux_right - flux_left) / dz_cell.view(1, 1, -1)
+        d += beta * d2v_all
+
+    d_batch = d.reshape(nx*ny, nz)
+    x_batch = solve_tridiagonal_batch(a, b, c, d_batch)
+    v[1:nx+1, 1:ny+1, 1:nz+1] = x_batch.reshape(nx, ny, nz)
+
+    return v
+
+
+@torch.jit.script
 def solve_implicit_diffusion_w(w: torch.Tensor, dt: float, nx: int, ny: int, nz: int,
                                 dz_c: torch.Tensor, dz_f: torch.Tensor, nu: float,
                                 theta: float = 0.5) -> torch.Tensor:
@@ -842,6 +943,216 @@ def solve_implicit_diffusion_w(w: torch.Tensor, dt: float, nx: int, ny: int, nz:
     # Write result directly into w (avoids full-tensor clone)
     w[1:nx+1, 1:ny+1, 1:nz] = x_batch.reshape(nx, ny, n_interior)
 
+    return w
+
+
+@torch.jit.script
+def solve_implicit_diffusion_w_vectorized(w: torch.Tensor, dt: float, nx: int, ny: int, nz: int,
+                                dz_c: torch.Tensor, dz_f: torch.Tensor, nu: float,
+                                theta: float = 0.5) -> torch.Tensor:
+    """
+    Vectorized version of solve_implicit_diffusion_w.
+    Replaces the for-k loop with vectorized operations.
+    w lives at z-faces with (nz-1) interior points.
+    """
+    alpha = theta * dt * nu
+    n_interior = nz - 1
+
+    dz_left = dz_f[0:n_interior]
+    dz_right = dz_f[1:nz]
+    dz_cv = dz_c[1:nz]
+
+    a = -alpha / (dz_left * dz_cv)
+    b = 1.0 + alpha * (1.0/dz_left + 1.0/dz_right) / dz_cv
+    c = -alpha / (dz_right * dz_cv)
+
+    a[0] = 0.0
+    c[n_interior-1] = 0.0
+
+    d = w[1:nx+1, 1:ny+1, 1:nz].clone()
+
+    if theta < 1.0:
+        beta = (1.0 - theta) * dt * nu
+        w_interior = w[1:nx+1, 1:ny+1, :]  # (nx, ny, nz+1)
+
+        # Vectorize interior points (k=1..n_interior-2)
+        if n_interior > 2:
+            center = w_interior[:, :, 1:n_interior-1]
+            left   = w_interior[:, :, 0:n_interior-2]
+            right  = w_interior[:, :, 2:n_interior]
+            flux_r = (right - center) / dz_right[1:n_interior-1].view(1, 1, -1)
+            flux_l = (center - left) / dz_left[1:n_interior-1].view(1, 1, -1)
+            d[:, :, 1:n_interior-1] += beta * (flux_r - flux_l) / dz_cv[1:n_interior-1].view(1, 1, -1)
+
+        # Bottom boundary k=0: w[0] = 0 (Dirichlet)
+        d2w_bot = ((w_interior[:, :, 1] - w_interior[:, :, 0]) / dz_right[0] -
+                   w_interior[:, :, 0] / dz_left[0]) / dz_cv[0]
+        d[:, :, 0] += beta * d2w_bot
+
+        # Top boundary k=n_interior-1: w[nz] = 0 (Dirichlet)
+        k = n_interior - 1
+        d2w_top = (-w_interior[:, :, k] / dz_right[k] -
+                   (w_interior[:, :, k] - w_interior[:, :, k-1]) / dz_left[k]) / dz_cv[k]
+        d[:, :, k] += beta * d2w_top
+
+    d_batch = d.reshape(nx*ny, n_interior)
+    x_batch = solve_tridiagonal_batch(a, b, c, d_batch)
+    w[1:nx+1, 1:ny+1, 1:nz] = x_batch.reshape(nx, ny, n_interior)
+
+    return w
+
+
+# ==============================================================================
+# BUILD-ONLY FUNCTIONS (for pluggable tridiagonal solver)
+# ==============================================================================
+# These JIT-compiled functions build the tridiagonal system (a, b, c, d_batch)
+# without solving it. Non-JIT wrappers below call build + either Thomas or cuSPARSE.
+
+@torch.jit.script
+def build_implicit_diffusion_uv_system(field: torch.Tensor, dt: float, nx: int, ny: int, nz: int,
+                                        dz_c: torch.Tensor, dz_f: torch.Tensor, nu: float,
+                                        theta: float, top_wall_bc_type: str
+                                        ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """
+    Build the tridiagonal system for implicit z-diffusion of u or v component.
+    Returns (a, b, c, d_batch) without solving.
+    """
+    alpha = theta * dt * nu
+
+    dz_left = dz_c[0:nz]
+    dz_right = dz_c[1:nz+1]
+    dz_cell = dz_f[0:nz]
+
+    a = -alpha / (dz_left * dz_cell)
+    b = 1.0 + alpha * (1.0/dz_left + 1.0/dz_right) / dz_cell
+    c = -alpha / (dz_right * dz_cell)
+
+    b[0] = b[0] - a[0]
+    a[0] = 0.0
+
+    if top_wall_bc_type == 'neumann':
+        b[nz-1] = b[nz-1] + c[nz-1]
+    else:
+        b[nz-1] = b[nz-1] - c[nz-1]
+    c[nz-1] = 0.0
+
+    d = field[1:nx+1, 1:ny+1, 1:nz+1].clone()
+
+    if theta < 1.0:
+        beta = (1.0 - theta) * dt * nu
+        interior = field[1:nx+1, 1:ny+1, :]
+        flux_right = (interior[:, :, 2:nz+2] - interior[:, :, 1:nz+1]) / dz_right.view(1, 1, -1)
+        flux_left  = (interior[:, :, 1:nz+1] - interior[:, :, 0:nz])   / dz_left.view(1, 1, -1)
+        d2_all = (flux_right - flux_left) / dz_cell.view(1, 1, -1)
+        d += beta * d2_all
+
+    d_batch = d.reshape(nx*ny, nz)
+    return a, b, c, d_batch
+
+
+@torch.jit.script
+def build_implicit_diffusion_w_system(w: torch.Tensor, dt: float, nx: int, ny: int, nz: int,
+                                       dz_c: torch.Tensor, dz_f: torch.Tensor, nu: float,
+                                       theta: float
+                                       ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """
+    Build the tridiagonal system for implicit z-diffusion of w component.
+    Returns (a, b, c, d_batch) without solving.
+    """
+    alpha = theta * dt * nu
+    n_interior = nz - 1
+
+    dz_left = dz_f[0:n_interior]
+    dz_right = dz_f[1:nz]
+    dz_cv = dz_c[1:nz]
+
+    a = -alpha / (dz_left * dz_cv)
+    b = 1.0 + alpha * (1.0/dz_left + 1.0/dz_right) / dz_cv
+    c = -alpha / (dz_right * dz_cv)
+
+    a[0] = 0.0
+    c[n_interior-1] = 0.0
+
+    d = w[1:nx+1, 1:ny+1, 1:nz].clone()
+
+    if theta < 1.0:
+        beta = (1.0 - theta) * dt * nu
+        w_interior = w[1:nx+1, 1:ny+1, :]
+
+        if n_interior > 2:
+            center = w_interior[:, :, 1:n_interior-1]
+            left   = w_interior[:, :, 0:n_interior-2]
+            right  = w_interior[:, :, 2:n_interior]
+            flux_r = (right - center) / dz_right[1:n_interior-1].view(1, 1, -1)
+            flux_l = (center - left) / dz_left[1:n_interior-1].view(1, 1, -1)
+            d[:, :, 1:n_interior-1] += beta * (flux_r - flux_l) / dz_cv[1:n_interior-1].view(1, 1, -1)
+
+        d2w_bot = ((w_interior[:, :, 1] - w_interior[:, :, 0]) / dz_right[0] -
+                   w_interior[:, :, 0] / dz_left[0]) / dz_cv[0]
+        d[:, :, 0] += beta * d2w_bot
+
+        k = n_interior - 1
+        d2w_top = (-w_interior[:, :, k] / dz_right[k] -
+                   (w_interior[:, :, k] - w_interior[:, :, k-1]) / dz_left[k]) / dz_cv[k]
+        d[:, :, k] += beta * d2w_top
+
+    d_batch = d.reshape(nx*ny, n_interior)
+    return a, b, c, d_batch
+
+
+# ==============================================================================
+# NON-JIT WRAPPERS (pluggable tridiagonal solver: Thomas or cuSPARSE)
+# ==============================================================================
+
+def solve_implicit_diffusion_u_ext(u, dt, nx, ny, nz, dz_c, dz_f, nu,
+                                    theta=0.5, top_wall_bc_type='dirichlet',
+                                    trid_solver=None):
+    """
+    Solve implicit z-diffusion for u using pluggable tridiagonal solver.
+    If trid_solver is None, uses Thomas algorithm. Otherwise uses trid_solver.solve_shared_coeffs.
+    """
+    a, b, c, d_batch = build_implicit_diffusion_uv_system(u, dt, nx, ny, nz, dz_c, dz_f, nu, theta, top_wall_bc_type)
+
+    if trid_solver is not None:
+        x_batch = trid_solver.solve_shared_coeffs(a, b, c, d_batch)
+    else:
+        x_batch = solve_tridiagonal_batch(a, b, c, d_batch)
+
+    u[1:nx+1, 1:ny+1, 1:nz+1] = x_batch.reshape(nx, ny, nz)
+    return u
+
+
+def solve_implicit_diffusion_v_ext(v, dt, nx, ny, nz, dz_c, dz_f, nu,
+                                    theta=0.5, top_wall_bc_type='dirichlet',
+                                    trid_solver=None):
+    """
+    Solve implicit z-diffusion for v using pluggable tridiagonal solver.
+    """
+    a, b, c, d_batch = build_implicit_diffusion_uv_system(v, dt, nx, ny, nz, dz_c, dz_f, nu, theta, top_wall_bc_type)
+
+    if trid_solver is not None:
+        x_batch = trid_solver.solve_shared_coeffs(a, b, c, d_batch)
+    else:
+        x_batch = solve_tridiagonal_batch(a, b, c, d_batch)
+
+    v[1:nx+1, 1:ny+1, 1:nz+1] = x_batch.reshape(nx, ny, nz)
+    return v
+
+
+def solve_implicit_diffusion_w_ext(w, dt, nx, ny, nz, dz_c, dz_f, nu,
+                                    theta=0.5, trid_solver=None):
+    """
+    Solve implicit z-diffusion for w using pluggable tridiagonal solver.
+    """
+    n_interior = nz - 1
+    a, b, c, d_batch = build_implicit_diffusion_w_system(w, dt, nx, ny, nz, dz_c, dz_f, nu, theta)
+
+    if trid_solver is not None:
+        x_batch = trid_solver.solve_shared_coeffs(a, b, c, d_batch)
+    else:
+        x_batch = solve_tridiagonal_batch(a, b, c, d_batch)
+
+    w[1:nx+1, 1:ny+1, 1:nz] = x_batch.reshape(nx, ny, n_interior)
     return w
 
 

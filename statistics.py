@@ -161,34 +161,26 @@ class TurbulenceStats:
         v_top = v_fluct[:, :, self.k_top - 1]
         w_top = w_fluct[:, :, self.k_top - 1]
 
-        # Compute 2D FFTs for both walls separately
-        u_fft_bot = torch.fft.rfft2(u_bot)
-        v_fft_bot = torch.fft.rfft2(v_bot)
-        w_fft_bot = torch.fft.rfft2(w_bot)
+        # Batched FFT: stack all 6 fields into a single tensor and compute one rfft2
+        # This reduces 6 separate GPU kernel launches to 1
+        fields = torch.stack([u_bot, v_bot, w_bot, u_top, v_top, -w_top])  # (6, nx, ny)
+        fft_all = torch.fft.rfft2(fields, dim=(-2, -1))  # single kernel launch
 
-        # For top wall, negate w to account for coordinate system (z points into wall)
-        # This is crucial for uw correlation
-        u_fft_top = torch.fft.rfft2(u_top)
-        v_fft_top = torch.fft.rfft2(v_top)
-        w_fft_top = torch.fft.rfft2(-w_top)
+        # Unpack FFT results
+        u_fft_bot, v_fft_bot, w_fft_bot = fft_all[0], fft_all[1], fft_all[2]
+        u_fft_top, v_fft_top, w_fft_top = fft_all[3], fft_all[4], fft_all[5]
 
-        # Compute energy spectra for bottom wall
-        E_uu_bot = torch.abs(u_fft_bot)**2 / (self.nx * self.ny)**2
-        E_vv_bot = torch.abs(v_fft_bot)**2 / (self.nx * self.ny)**2
-        E_ww_bot = torch.abs(w_fft_bot)**2 / (self.nx * self.ny)**2
-        E_uw_bot = (u_fft_bot * torch.conj(w_fft_bot)).real / (self.nx * self.ny)**2
+        # Compute energy spectra with common normalization factor
+        norm = 1.0 / (self.nx * self.ny)**2
 
-        # Compute energy spectra for top wall
-        E_uu_top = torch.abs(u_fft_top)**2 / (self.nx * self.ny)**2
-        E_vv_top = torch.abs(v_fft_top)**2 / (self.nx * self.ny)**2
-        E_ww_top = torch.abs(w_fft_top)**2 / (self.nx * self.ny)**2
-        E_uw_top = (u_fft_top * torch.conj(w_fft_top)).real / (self.nx * self.ny)**2
+        # Auto-spectra: |fft|^2 for both walls, averaged
+        E_uu_2d = 0.5 * (torch.abs(u_fft_bot)**2 + torch.abs(u_fft_top)**2) * norm
+        E_vv_2d = 0.5 * (torch.abs(v_fft_bot)**2 + torch.abs(v_fft_top)**2) * norm
+        E_ww_2d = 0.5 * (torch.abs(w_fft_bot)**2 + torch.abs(w_fft_top)**2) * norm
 
-        # Average the spectra (no flips needed for auto-spectra)
-        E_uu_2d = 0.5 * (E_uu_bot + E_uu_top)
-        E_vv_2d = 0.5 * (E_vv_bot + E_vv_top)
-        E_ww_2d = 0.5 * (E_ww_bot + E_ww_top)
-        E_uw_2d = 0.5 * (E_uw_bot + E_uw_top)
+        # Cross-spectrum: Re(u * conj(w)) for both walls, averaged
+        E_uw_2d = 0.5 * ((u_fft_bot * torch.conj(w_fft_bot)).real +
+                          (u_fft_top * torch.conj(w_fft_top)).real) * norm
 
         # Keep only positive wavenumbers (skip DC) and fold negative wavenumbers
         # Use symmetric spectrum for negative kx: E(kx) + E(-kx) for kx > 0
@@ -197,32 +189,24 @@ class TurbulenceStats:
         nkx = self.nx // 2
         nky = self.ny // 2
 
-        # Helper to fold a spectrum
-        def fold_spectrum(E):
-            # E shape: (nx, nky+1)
-            # Positive kx part (indices 1 to nkx)
-            E_pos = E[1:nkx+1, 1:nky+1]
+        # Fold spectra: add positive and negative kx contributions
+        # Stack all 4 spectra for batched folding: (4, nx, nky+1)
+        E_stack = torch.stack([E_uu_2d, E_vv_2d, E_ww_2d, E_uw_2d])
 
-            # Negative kx part (indices nx-nkx to nx)
-            # We need to flip this to match the order of E_pos (1 to nkx)
-            # indices in E: nx-1 (k=-1), nx-2 (k=-2), ..., nx-nkx (k=-nkx)
-            # We want to add E[nx-1] to E[1], E[nx-2] to E[2], etc.
-            # So we take E[nx-nkx : nx] and flip it.
-            E_neg = E[self.nx-nkx:self.nx, 1:nky+1]
-            E_neg_flipped = torch.flip(E_neg, dims=[0])
+        # Positive kx part (indices 1 to nkx): (4, nkx, nky)
+        E_pos = E_stack[:, 1:nkx+1, 1:nky+1]
 
-            return E_pos + E_neg_flipped
+        # Negative kx part: reverse-order slice avoids torch.flip allocation
+        # E[nx-1] (k=-1) maps to E_pos[0] (k=1), E[nx-2] (k=-2) maps to E_pos[1] (k=2), etc.
+        E_neg = E_stack[:, self.nx-1:self.nx-nkx-1:-1, 1:nky+1]  # (4, nkx, nky)
 
-        E_uu_2d_sym = fold_spectrum(E_uu_2d)
-        E_vv_2d_sym = fold_spectrum(E_vv_2d)
-        E_ww_2d_sym = fold_spectrum(E_ww_2d)
-        E_uw_2d_sym = fold_spectrum(E_uw_2d)
+        E_folded = E_pos + E_neg  # (4, nkx, nky)
 
         # Accumulate raw spectra (premultiplication done during plotting)
-        self.E_uu_2d_sum += E_uu_2d_sym[:nkx, :nky]
-        self.E_vv_2d_sum += E_vv_2d_sym[:nkx, :nky]
-        self.E_ww_2d_sum += E_ww_2d_sym[:nkx, :nky]
-        self.E_uw_2d_sum += E_uw_2d_sym[:nkx, :nky]
+        self.E_uu_2d_sum += E_folded[0, :nkx, :nky]
+        self.E_vv_2d_sum += E_folded[1, :nkx, :nky]
+        self.E_ww_2d_sum += E_folded[2, :nkx, :nky]
+        self.E_uw_2d_sum += E_folded[3, :nkx, :nky]
 
         # Increment sample counter
         self.n_samples += 1

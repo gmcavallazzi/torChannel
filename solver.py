@@ -5,7 +5,14 @@ import numpy as np
 import operators
 from utils import generate_grid, plot_grid, save_grid_csv, plot_profile, compute_u_tau, compute_bulk_velocity, test_poisson_matrix_indexing, print_divergence_field, compute_divergence, print_poisson_matrix, save_flow_fields
 from initflow import initialize_flow, initialize_flow_from_file
-from operators import diffusion_u, diffusion_v, diffusion_w, advection_u, advection_v, advection_w, diffusion_xy_u, diffusion_xy_v, diffusion_xy_w, solve_implicit_diffusion_u, solve_implicit_diffusion_v, solve_implicit_diffusion_w
+from operators import (diffusion_u, diffusion_v, diffusion_w,
+                       advection_u, advection_v, advection_w,
+                       diffusion_xy_u, diffusion_xy_v, diffusion_xy_w,
+                       solve_implicit_diffusion_u_vectorized as solve_implicit_diffusion_u,
+                       solve_implicit_diffusion_v_vectorized as solve_implicit_diffusion_v,
+                       solve_implicit_diffusion_w_vectorized as solve_implicit_diffusion_w,
+                       solve_implicit_diffusion_u_ext, solve_implicit_diffusion_v_ext,
+                       solve_implicit_diffusion_w_ext)
 from projection import build_poisson_matrix, solve_poisson, project_velocity
 from projection_fft import initialize_fft_solver, solve_poisson_fft
 from statistics import TurbulenceStats
@@ -270,6 +277,24 @@ class ChannelFlow:
 
 
         self.solver_type = config.get('solver', {}).get('type', 'fft')
+        self.tridiagonal_type = config.get('solver', {}).get('tridiagonal', 'thomas')
+
+        # Initialize cuSPARSE tridiagonal solver if requested
+        self.trid_solver = None
+        if self.tridiagonal_type == 'cusparse':
+            try:
+                from tridiagonal_cusparse import CuSparseTridiagonalSolver, is_available
+                if is_available():
+                    self.trid_solver = CuSparseTridiagonalSolver()
+                    print("Tridiagonal solver: cuSPARSE (GPU-accelerated)", flush=True)
+                else:
+                    print("WARNING: cuSPARSE requested but not available, falling back to Thomas algorithm", flush=True)
+                    self.tridiagonal_type = 'thomas'
+            except Exception as e:
+                print(f"WARNING: cuSPARSE initialization failed ({e}), falling back to Thomas algorithm", flush=True)
+                self.tridiagonal_type = 'thomas'
+        else:
+            print("Tridiagonal solver: Thomas algorithm", flush=True)
 
         if self.solver_type == 'direct':
             self.poisson_matrix = build_poisson_matrix(self.nx, self.ny, self.nz,
@@ -281,6 +306,9 @@ class ChannelFlow:
             self.fft_data = initialize_fft_solver(self.nx, self.ny, self.nz,
                                                     self.dx, self.dy, self.dz_c, self.dz_f,
                                                     top_wall_bc_type=self.top_wall_bc_type)
+            # Store cuSPARSE solver reference in fft_data for Poisson solver use
+            if self.trid_solver is not None:
+                self.fft_data['trid_solver'] = self.trid_solver
         else:
             raise ValueError(f"Unknown solver type: {self.solver_type}")
 
@@ -617,12 +645,27 @@ class ChannelFlow:
         # where u^* is the velocity after explicit update
         self.apply_bc_uvw()  # Fused boundary conditions
 
-        self.u = solve_implicit_diffusion_u(self.u, dt, self.nx, self.ny, self.nz,
-                                            self.dz_c, self.dz_f, self.nu, top_wall_bc_type=self.top_wall_bc_type)
-        self.v = solve_implicit_diffusion_v(self.v, dt, self.nx, self.ny, self.nz,
-                                            self.dz_c, self.dz_f, self.nu, top_wall_bc_type=self.top_wall_bc_type)
-        self.w = solve_implicit_diffusion_w(self.w, dt, self.nx, self.ny, self.nz,
-                                            self.dz_c, self.dz_f, self.nu)
+        if self.trid_solver is not None:
+            # Use pluggable solver (cuSPARSE or other)
+            self.u = solve_implicit_diffusion_u_ext(self.u, dt, self.nx, self.ny, self.nz,
+                                                     self.dz_c, self.dz_f, self.nu,
+                                                     top_wall_bc_type=self.top_wall_bc_type,
+                                                     trid_solver=self.trid_solver)
+            self.v = solve_implicit_diffusion_v_ext(self.v, dt, self.nx, self.ny, self.nz,
+                                                     self.dz_c, self.dz_f, self.nu,
+                                                     top_wall_bc_type=self.top_wall_bc_type,
+                                                     trid_solver=self.trid_solver)
+            self.w = solve_implicit_diffusion_w_ext(self.w, dt, self.nx, self.ny, self.nz,
+                                                     self.dz_c, self.dz_f, self.nu,
+                                                     trid_solver=self.trid_solver)
+        else:
+            # Default: JIT-compiled Thomas algorithm (vectorized)
+            self.u = solve_implicit_diffusion_u(self.u, dt, self.nx, self.ny, self.nz,
+                                                self.dz_c, self.dz_f, self.nu, top_wall_bc_type=self.top_wall_bc_type)
+            self.v = solve_implicit_diffusion_v(self.v, dt, self.nx, self.ny, self.nz,
+                                                self.dz_c, self.dz_f, self.nu, top_wall_bc_type=self.top_wall_bc_type)
+            self.w = solve_implicit_diffusion_w(self.w, dt, self.nx, self.ny, self.nz,
+                                                self.dz_c, self.dz_f, self.nu)
 
         # Update ghost cells for intermediate velocity before divergence computation
         self.apply_bc_uvw()  # Fused boundary conditions

@@ -49,6 +49,7 @@ initialization:
 # ------------------------------------------------------------------------------
 solver:
   type: "fft"  # Poisson solver type. Options: "fft" (fast, recommended), "direct" (slow, for testing)
+  # tridiagonal: "cusparse"  # Tridiagonal solver. Options: "thomas" (default), "cusparse" (GPU-accelerated)
 
 # ------------------------------------------------------------------------------
 # TIME INTEGRATION

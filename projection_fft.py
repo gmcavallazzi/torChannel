@@ -129,7 +129,11 @@ def solve_poisson_fft(div, fft_data):
     tri_c_flat = tri_c.reshape(-1, nz)
 
     # Solve all tridiagonal systems in parallel
-    p_hat_flat = solve_tridiagonal(tri_a_flat, tri_b_flat, tri_c_flat, div_hat_flat)
+    trid_solver = fft_data.get('trid_solver', None)
+    if trid_solver is not None:
+        p_hat_flat = trid_solver.solve_per_system(tri_a_flat, tri_b_flat, tri_c_flat, div_hat_flat)
+    else:
+        p_hat_flat = solve_tridiagonal(tri_a_flat, tri_b_flat, tri_c_flat, div_hat_flat)
 
     # Reshape back to (nx, nky, nz)
     p_hat = p_hat_flat.reshape(nkx, nky, nz)
