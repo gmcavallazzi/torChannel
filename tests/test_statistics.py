@@ -29,7 +29,7 @@ import sys
 import os
 import argparse
 import torch
-from statistics import compute_statistics_from_snapshot
+from turbstats import compute_statistics_from_snapshot
 
 # Set double precision for consistency
 torch.set_default_dtype(torch.float64)

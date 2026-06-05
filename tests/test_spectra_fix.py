@@ -11,7 +11,7 @@ import torch
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib as mpl
-from statistics import TurbulenceStats
+from turbstats import TurbulenceStats
 from utils import load_flow_fields
 
 # LaTeX formatting - EXACTLY matching plot_statistics.py

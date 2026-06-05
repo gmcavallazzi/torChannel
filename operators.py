@@ -1,4 +1,5 @@
 import torch
+from tridiag import pcr_solve
 
 """
 Staggered grid operators for incompressible Navier-Stokes equations.
@@ -547,51 +548,16 @@ def diffusion_xy_w(w: torch.Tensor, nx: int, ny: int, nz: int,
     return diff_w
 
 
-@torch.jit.script
 def solve_tridiagonal_batch(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor,
                              d: torch.Tensor) -> torch.Tensor:
     """
-    Solve batched tridiagonal systems using Thomas algorithm (vectorized).
-    GPU-optimized: solves all systems in parallel without loops over batch dimension.
-
-    Args:
-        a: Lower diagonal (shape: (n,), same for all systems)
-        b: Main diagonal (shape: (n,), same for all systems)
-        c: Upper diagonal (shape: (n,), same for all systems)
-        d: Right-hand side (shape: (batch, n), different for each system)
-
-    Returns:
-        x: Solution (shape: (batch, n))
-
-    Note: a[0] and c[n-1] are not used (tridiagonal structure)
+    Solve batched tridiagonal systems via parallel cyclic reduction (see
+    tridiag.pcr_solve). a, b, c are 1-D (n,), shared across the batch; d is
+    (batch, n). PCR replaces the old serial Thomas sweep (~2n sequential kernel
+    launches) with ~log2(n) vectorized steps — a large win on GPUs without the
+    JIT fuser (GB10/sm_121). a[0] and c[n-1] are ignored.
     """
-    batch_size = d.shape[0]
-    n = d.shape[1]
-
-    # Allocate workspace tensors
-    # c_star and d_star have same shape as inputs
-    c_star = torch.zeros(n, device=d.device, dtype=d.dtype)
-    d_star = torch.zeros_like(d)  # (batch, n)
-    x = torch.zeros_like(d)       # (batch, n)
-
-    # Forward sweep (vectorized over batch dimension)
-    # First row
-    c_star[0] = c[0] / b[0]
-    d_star[:, 0] = d[:, 0] / b[0]
-
-    # Remaining rows (sequential in n, vectorized in batch)
-    for i in range(1, n):
-        denom = b[i] - a[i] * c_star[i-1]
-        if i < n - 1:
-            c_star[i] = c[i] / denom
-        d_star[:, i] = (d[:, i] - a[i] * d_star[:, i-1]) / denom
-
-    # Back substitution (vectorized over batch dimension)
-    x[:, n-1] = d_star[:, n-1]
-    for i in range(n-2, -1, -1):
-        x[:, i] = d_star[:, i] - c_star[i] * x[:, i+1]
-
-    return x
+    return pcr_solve(a, b, c, d)
 
 
 @torch.jit.script
@@ -660,34 +626,22 @@ def solve_implicit_diffusion_u(u: torch.Tensor, dt: float, nx: int, ny: int, nz:
     # Add explicit diffusion term for Crank-Nicolson: (1-theta)*dt*nu*d²u/dz²
     if theta < 1.0:
         beta = (1.0 - theta) * dt * nu
-        u_interior = u[1:nx+1, 1:ny+1, :]  # Shape: (nx, ny, nz+2) with ghost cells
+        U = u[1:nx+1, 1:ny+1, :]  # Shape: (nx, ny, nz+2) with ghost cells
 
-        # Vectorized d²u/dz² for all k
-        for k in range(nz):
-            if k == 0:
-                # Bottom BC: u[0] = -u[1] (no-slip)
-                # d²u/dz² = [(u[2]-u[1])/dz_right - (u[1]-u[0])/dz_left] / dz_cell
-                # With BC u[0] = -u[1]: (u[1]-u[0])/dz_left = 2*u[1]/dz_left
-                d2u = ((u_interior[:, :, 2] - u_interior[:, :, 1]) / dz_right[0] -
-                       2.0 * u_interior[:, :, 1] / dz_left[0]) / dz_cell[0]
-            elif k == nz - 1:
-                if top_wall_bc_type == 'neumann':
-                    # Top BC: u[nz] = u[nz-1] (free-slip)
-                    # d²u/dz² = [(u[nz+1]-u[nz])/dz_right - (u[nz]-u[nz-1])/dz_left] / dz_cell
-                    # With BC u[nz+1] = u[nz]: (u[nz+1]-u[nz])/dz_right = 0
-                    d2u = (0.0 - (u_interior[:, :, nz] - u_interior[:, :, nz-1]) / dz_left[nz-1]) / dz_cell[nz-1]
-                else:
-                    # Top BC: u[nz] = -u[nz-1] (no-slip)
-                    # d²u/dz² = [(u[nz+1]-u[nz])/dz_right - (u[nz]-u[nz-1])/dz_left] / dz_cell
-                    # With BC u[nz+1] = -u[nz]: (u[nz+1]-u[nz])/dz_right = -2*u[nz]/dz_right
-                    d2u = (-2.0 * u_interior[:, :, nz] / dz_right[nz-1] -
-                           (u_interior[:, :, nz] - u_interior[:, :, nz-1]) / dz_left[nz-1]) / dz_cell[nz-1]
-            else:
-                # Interior: d²u/dz² = [(u[k+1]-u[k])/dz_right - (u[k]-u[k-1])/dz_left] / dz_cell
-                d2u = ((u_interior[:, :, k+2] - u_interior[:, :, k+1]) / dz_right[k] -
-                       (u_interior[:, :, k+1] - u_interior[:, :, k]) / dz_left[k]) / dz_cell[k]
-
-            d[:, :, k] += beta * d2u
+        # Vectorized d²u/dz² for all k (1 stencil op; broadcast dz over last axis).
+        # The generic interior stencil uses the ghosts U[0], U[nz+1]; the two wall
+        # columns are then overwritten with their exact BC closures so the result
+        # is independent of the ghost values (bit-identical to the old per-k loop).
+        d2u = ((U[:, :, 2:nz+2] - U[:, :, 1:nz+1]) / dz_right
+               - (U[:, :, 1:nz+1] - U[:, :, 0:nz]) / dz_left) / dz_cell
+        d2u[:, :, 0] = ((U[:, :, 2] - U[:, :, 1]) / dz_right[0]
+                        - 2.0 * U[:, :, 1] / dz_left[0]) / dz_cell[0]
+        if top_wall_bc_type == 'neumann':
+            d2u[:, :, nz-1] = (-(U[:, :, nz] - U[:, :, nz-1]) / dz_left[nz-1]) / dz_cell[nz-1]
+        else:
+            d2u[:, :, nz-1] = (-2.0 * U[:, :, nz] / dz_right[nz-1]
+                               - (U[:, :, nz] - U[:, :, nz-1]) / dz_left[nz-1]) / dz_cell[nz-1]
+        d += beta * d2u
 
     # Solve batched tridiagonal system for all (i,j) columns
     # Reshape to (nx*ny, nz) for batch processing
@@ -754,34 +708,19 @@ def solve_implicit_diffusion_v(v: torch.Tensor, dt: float, nx: int, ny: int, nz:
     # Add explicit diffusion term for Crank-Nicolson: (1-theta)*dt*nu*d²v/dz²
     if theta < 1.0:
         beta = (1.0 - theta) * dt * nu
-        v_interior = v[1:nx+1, 1:ny+1, :]  # Shape: (nx, ny, nz+2) with ghost cells
+        V = v[1:nx+1, 1:ny+1, :]  # Shape: (nx, ny, nz+2) with ghost cells
 
-        # Vectorized d²v/dz² for all k
-        for k in range(nz):
-            if k == 0:
-                # Bottom BC: v[0] = -v[1] (no-slip)
-                # d²v/dz² = [(v[2]-v[1])/dz_right - (v[1]-v[0])/dz_left] / dz_cell
-                # With BC v[0] = -v[1]: (v[1]-v[0])/dz_left = 2*v[1]/dz_left
-                d2v = ((v_interior[:, :, 2] - v_interior[:, :, 1]) / dz_right[0] -
-                       2.0 * v_interior[:, :, 1] / dz_left[0]) / dz_cell[0]
-            elif k == nz - 1:
-                if top_wall_bc_type == 'neumann':
-                    # Top BC: v[nz] = v[nz-1] (free-slip)
-                    # d²v/dz² = [(v[nz+1]-v[nz])/dz_right - (v[nz]-v[nz-1])/dz_left] / dz_cell
-                    # With BC v[nz+1] = v[nz]: (v[nz+1]-v[nz])/dz_right = 0
-                    d2v = (0.0 - (v_interior[:, :, nz] - v_interior[:, :, nz-1]) / dz_left[nz-1]) / dz_cell[nz-1]
-                else:
-                    # Top BC: v[nz] = -v[nz-1] (no-slip)
-                    # d²v/dz² = [(v[nz+1]-v[nz])/dz_right - (v[nz]-v[nz-1])/dz_left] / dz_cell
-                    # With BC v[nz+1] = -v[nz]: (v[nz+1]-v[nz])/dz_right = -2*v[nz]/dz_right
-                    d2v = (-2.0 * v_interior[:, :, nz] / dz_right[nz-1] -
-                           (v_interior[:, :, nz] - v_interior[:, :, nz-1]) / dz_left[nz-1]) / dz_cell[nz-1]
-            else:
-                # Interior: d²v/dz² = [(v[k+1]-v[k])/dz_right - (v[k]-v[k-1])/dz_left] / dz_cell
-                d2v = ((v_interior[:, :, k+2] - v_interior[:, :, k+1]) / dz_right[k] -
-                       (v_interior[:, :, k+1] - v_interior[:, :, k]) / dz_left[k]) / dz_cell[k]
-
-            d[:, :, k] += beta * d2v
+        # Vectorized d²v/dz² for all k (see solve_implicit_diffusion_u).
+        d2v = ((V[:, :, 2:nz+2] - V[:, :, 1:nz+1]) / dz_right
+               - (V[:, :, 1:nz+1] - V[:, :, 0:nz]) / dz_left) / dz_cell
+        d2v[:, :, 0] = ((V[:, :, 2] - V[:, :, 1]) / dz_right[0]
+                        - 2.0 * V[:, :, 1] / dz_left[0]) / dz_cell[0]
+        if top_wall_bc_type == 'neumann':
+            d2v[:, :, nz-1] = (-(V[:, :, nz] - V[:, :, nz-1]) / dz_left[nz-1]) / dz_cell[nz-1]
+        else:
+            d2v[:, :, nz-1] = (-2.0 * V[:, :, nz] / dz_right[nz-1]
+                               - (V[:, :, nz] - V[:, :, nz-1]) / dz_left[nz-1]) / dz_cell[nz-1]
+        d += beta * d2v
 
     # Solve batched tridiagonal system
     d_batch = d.reshape(nx*ny, nz)
@@ -848,26 +787,20 @@ def solve_implicit_diffusion_w(w: torch.Tensor, dt: float, nx: int, ny: int, nz:
     # Add explicit diffusion term for Crank-Nicolson: (1-theta)*dt*nu*d²w/dz²
     if theta < 1.0:
         beta = (1.0 - theta) * dt * nu
-        w_interior = w[1:nx+1, 1:ny+1, :]  # Shape: (nx, ny, nz+1) with ghost cells at walls
+        W = w[1:nx+1, 1:ny+1, :]  # Shape: (nx, ny, nz+1), faces 0..nz (walls at 0, nz)
+        ni = n_interior
 
-        # Vectorized d²w/dz² for all k in [0, n_interior)
-        for k in range(n_interior):
-            if k == 0:
-                # Bottom BC: w[0] = 0 (Dirichlet)
-                # d²w/dz² = [(w[k+1]-w[k])/dz_right - (w[k]-0)/dz_left] / dz_cv
-                d2w = ((w_interior[:, :, k+1] - w_interior[:, :, k]) / dz_right[k] -
-                       w_interior[:, :, k] / dz_left[k]) / dz_cv[k]
-            elif k == n_interior - 1:
-                # Top BC: w[nz] = 0 (Dirichlet)
-                # d²w/dz² = [(0-w[k])/dz_right - (w[k]-w[k-1])/dz_left] / dz_cv
-                d2w = (-w_interior[:, :, k] / dz_right[k] -
-                       (w_interior[:, :, k] - w_interior[:, :, k-1]) / dz_left[k]) / dz_cv[k]
-            else:
-                # Interior: d²w/dz² = [(w[k+1]-w[k])/dz_right - (w[k]-w[k-1])/dz_left] / dz_cv
-                d2w = ((w_interior[:, :, k+1] - w_interior[:, :, k]) / dz_right[k] -
-                       (w_interior[:, :, k] - w_interior[:, :, k-1]) / dz_left[k]) / dz_cv[k]
-
-            d[:, :, k] += beta * d2w
+        # Vectorized d²w/dz² over the interior faces (bit-identical to the old
+        # per-k loop, including its index convention). Middle by slicing; the two
+        # wall-adjacent faces use w=0 at the wall.
+        d2w = torch.empty((nx, ny, ni), dtype=w.dtype, device=w.device)
+        d2w[:, :, 1:ni-1] = ((W[:, :, 2:ni] - W[:, :, 1:ni-1]) / dz_right[1:ni-1]
+                             - (W[:, :, 1:ni-1] - W[:, :, 0:ni-2]) / dz_left[1:ni-1]) / dz_cv[1:ni-1]
+        d2w[:, :, 0] = ((W[:, :, 1] - W[:, :, 0]) / dz_right[0]
+                        - W[:, :, 0] / dz_left[0]) / dz_cv[0]
+        d2w[:, :, ni-1] = (-W[:, :, ni-1] / dz_right[ni-1]
+                           - (W[:, :, ni-1] - W[:, :, ni-2]) / dz_left[ni-1]) / dz_cv[ni-1]
+        d += beta * d2w
 
     # Solve batched tridiagonal system
     d_batch = d.reshape(nx*ny, n_interior)
@@ -1398,3 +1331,21 @@ def compute_cfl_fused(
     dti = torch.max(torch.stack([max_dtix, max_dtiy, max_dtiz]))
 
     return dti.item()
+
+
+# ==============================================================================
+# OPTIONAL torch.compile (Inductor/Triton) — Layer 2 GPU speedup
+# ==============================================================================
+# On GB10 (sm_121) the legacy TorchScript fuser cannot NVRTC-compile, so this
+# code runs with PYTORCH_JIT=0 (the @torch.jit.script decorators become
+# passthroughs). Inductor/Triton DOES support sm_121 (via ptxas + driver), so we
+# torch.compile the launch-bound hot functions — the vectorized CN + PCR diffusion
+# solves and the fused momentum RHS — fusing many eager kernels into a few.
+# Opt-in via TORCHANNEL_COMPILE=1 (needs CC=gcc so Inductor's host compiler isn't
+# nvc, which rejects -Wno-psabi).
+import os as _os
+if _os.environ.get("TORCHANNEL_COMPILE", "0") == "1":
+    compute_momentum_rhs_fused_imex = torch.compile(compute_momentum_rhs_fused_imex)
+    solve_implicit_diffusion_u = torch.compile(solve_implicit_diffusion_u)
+    solve_implicit_diffusion_v = torch.compile(solve_implicit_diffusion_v)
+    solve_implicit_diffusion_w = torch.compile(solve_implicit_diffusion_w)

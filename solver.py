@@ -8,7 +8,16 @@ from initflow import initialize_flow, initialize_flow_from_file
 from operators import diffusion_u, diffusion_v, diffusion_w, advection_u, advection_v, advection_w, diffusion_xy_u, diffusion_xy_v, diffusion_xy_w, solve_implicit_diffusion_u, solve_implicit_diffusion_v, solve_implicit_diffusion_w
 from projection import build_poisson_matrix, solve_poisson, project_velocity
 from projection_fft import initialize_fft_solver, solve_poisson_fft
-from statistics import TurbulenceStats
+from turbstats import TurbulenceStats
+
+# Layer-2 torch.compile (see operators.py): also fuse the remaining per-step
+# helpers — divergence, bulk velocity, and the projection correction. Opt-in via
+# TORCHANNEL_COMPILE=1 (needs CC=gcc; run under PYTORCH_JIT=0). project_velocity
+# is given dt as a 0-D tensor at the call site so a varying dt does not recompile.
+if os.environ.get("TORCHANNEL_COMPILE", "0") == "1":
+    compute_divergence = torch.compile(compute_divergence)
+    compute_bulk_velocity = torch.compile(compute_bulk_velocity)
+    project_velocity = torch.compile(project_velocity)
 
 
 @torch.jit.script
@@ -617,11 +626,15 @@ class ChannelFlow:
         # where u^* is the velocity after explicit update
         self.apply_bc_uvw()  # Fused boundary conditions
 
-        self.u = solve_implicit_diffusion_u(self.u, dt, self.nx, self.ny, self.nz,
+        # Pass dt as a 0-D tensor: torch.compile guards on Python-float values and
+        # would recompile every time the adaptive dt changes; tensor values are
+        # not guarded, so a varying dt reuses the compiled kernels.
+        dt_t = torch.as_tensor(dt, device=self.device, dtype=torch.float64)
+        self.u = solve_implicit_diffusion_u(self.u, dt_t, self.nx, self.ny, self.nz,
                                             self.dz_c, self.dz_f, self.nu, top_wall_bc_type=self.top_wall_bc_type)
-        self.v = solve_implicit_diffusion_v(self.v, dt, self.nx, self.ny, self.nz,
+        self.v = solve_implicit_diffusion_v(self.v, dt_t, self.nx, self.ny, self.nz,
                                             self.dz_c, self.dz_f, self.nu, top_wall_bc_type=self.top_wall_bc_type)
-        self.w = solve_implicit_diffusion_w(self.w, dt, self.nx, self.ny, self.nz,
+        self.w = solve_implicit_diffusion_w(self.w, dt_t, self.nx, self.ny, self.nz,
                                             self.dz_c, self.dz_f, self.nu)
 
         # Update ghost cells for intermediate velocity before divergence computation
@@ -644,9 +657,11 @@ class ChannelFlow:
                 print(f"WARNING: Pressure has NaN or Inf values at step {self.current_step}!", flush=True)
 
         # Step 3: Project velocity to divergence-free field: u = u* - dt*∇p
+        # (dt_t is a 0-D tensor — see the implicit-diffusion call above — so the
+        # compiled projection does not recompile when the adaptive dt changes.)
         self.u, self.v, self.w = project_velocity(self.u, self.v, self.w, self.p,
                                                    self.nx, self.ny, self.nz,
-                                                   self.dx, self.dy, self.dz_c, self.dz_f, dt)
+                                                   self.dx, self.dy, self.dz_c, self.dz_f, dt_t)
 
         # Reapply boundary conditions after projection
         self.apply_bc_uvw()  # Fused boundary conditions

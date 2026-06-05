@@ -1,7 +1,7 @@
 
 import torch
 import numpy as np
-from statistics import TurbulenceStats
+from turbstats import TurbulenceStats
 
 def verify_wall_averaging():
     print("="*80)
