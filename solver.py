@@ -386,6 +386,33 @@ class ChannelFlow:
         self.time = self.initial_time
         self.current_step = self.initial_step  # Track current step for diagnostics
 
+        # Optional CUDA-graph capture of the FFT-Poisson solve. The solve is a
+        # cuFFT pair plus a serial (256-launch) Thomas sweep that can't be portably
+        # compiled (the loop unrolls); a CUDA graph instead captures those launches
+        # once and replays them with ~one launch. Opt-in via TORCHANNEL_POISSON_CUDAGRAPH=1.
+        self._pgraph = None
+        self._pg_cudagraph = (os.environ.get("TORCHANNEL_POISSON_CUDAGRAPH", "0") == "1"
+                              and self.device.type == 'cuda'
+                              and self.solver_type == 'fft')
+
+    def _poisson_fft_graphed(self, rhs):
+        """Replay (or first capture) the FFT-Poisson solve as a CUDA graph.
+        Returns the pressure (the solver's persistent workspace_p)."""
+        if self._pgraph is None:
+            self._pg_in = rhs.clone()                       # static capture input
+            warm = torch.cuda.Stream()
+            warm.wait_stream(torch.cuda.current_stream())
+            with torch.cuda.stream(warm):
+                for _ in range(3):                          # build cuFFT plans etc.
+                    solve_poisson_fft(self._pg_in, self.fft_data)
+            torch.cuda.current_stream().wait_stream(warm)
+            self._pgraph = torch.cuda.CUDAGraph()
+            with torch.cuda.graph(self._pgraph):
+                self._pg_out = solve_poisson_fft(self._pg_in, self.fft_data)
+        self._pg_in.copy_(rhs)
+        self._pgraph.replay()
+        return self._pg_out
+
     def apply_bc_u(self):
         """Apply boundary conditions to u-velocity (legacy, use apply_bc_uvw for better performance)"""
         # Periodic BC in x (u is staggered in x, shape nx+1)
@@ -649,7 +676,10 @@ class ChannelFlow:
         if self.solver_type == 'direct':
             self.p = solve_poisson(self.poisson_matrix, div / dt, self.nx, self.ny, self.nz, self.top_wall_bc_type)
         elif self.solver_type == 'fft':
-            self.p = solve_poisson_fft(div / dt, self.fft_data)
+            if self._pg_cudagraph:
+                self.p = self._poisson_fft_graphed(div / dt)
+            else:
+                self.p = solve_poisson_fft(div / dt, self.fft_data)
 
         # Diagnostic: check pressure solution (only every 100 steps to minimize GPU-CPU sync overhead)
         if self.current_step % 100 == 0:

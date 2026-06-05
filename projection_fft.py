@@ -145,11 +145,14 @@ def solve_poisson_fft(div, fft_data):
     # Fill interior
     p[1:nx+1, 1:ny+1, 1:nz+1] = p_interior
 
-    # Fused periodic BC in x-direction (both boundaries at once)
-    p[[0, nx+1], :, :] = p[[nx, 1], :, :]
+    # Periodic BC in x (plain slices, not list-fancy-indexing: the latter builds
+    # host index tensors, which break CUDA-graph capture of this solve).
+    p[0] = p[nx]
+    p[nx+1] = p[1]
 
-    # Fused periodic BC in y-direction (both boundaries at once)
-    p[:, [0, ny+1], :] = p[:, [ny, 1], :]
+    # Periodic BC in y
+    p[:, 0] = p[:, ny]
+    p[:, ny+1] = p[:, 1]
 
     # Pressure BC in z-direction: depends on velocity BC type
     # Bottom wall: always Neumann (∂p/∂z = 0)
