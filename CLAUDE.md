@@ -48,6 +48,15 @@ There is no test runner framework (no pytest). Tests are standalone scripts run 
 
 **Output**: `.npz` files for fields, timeseries, and statistics checkpoints. Restart is supported by pointing `initialization.field_file` to a saved checkpoint.
 
+## Project context (MERGE fractal-mixing study)
+
+This repo is being used to test the MERGE proposal on fractal-interface mixing
+enhancement. The passive-scalar feature (`scalar.py`), the Koch fractal initial
+condition, the mixing driver, current results, the key architectural constraints,
+and the paused next steps are documented in **`docs/MERGE_CONTEXT.md`** — read it
+first when resuming this work (it is the portable substitute for the workstation-local
+Claude memory, which does not travel with the repo).
+
 ## Key Conventions
 
 - All tensor operations use PyTorch with `torch.float64` default dtype

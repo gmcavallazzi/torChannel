@@ -1,0 +1,82 @@
+# MERGE project context (portable)
+
+This file travels with the repo so the project context is not lost when the code is
+moved to another machine (e.g. a GPU/SLURM cluster). It mirrors the working notes
+that otherwise live only in a local Claude Code memory on the original workstation.
+
+## Goal
+
+Test the **MERGE** research proposal (*"Fractal Boundary Conditioning for Passive
+Mixing Enhancement in Microfluidic Channels"*, de Oliveira & Scheid; `draft_BS.pdf`
+on the original workstation). Central claim:
+
+    L_mix(N) / L_mix(0)  ~  r^{-D_f N}        (proposal Eq. 4)
+
+i.e. imposing a Koch-fractal fold (generation N, contraction ratio r, dimension
+D_f = log m / log r) on the fluid-fluid interface at a microfluidic junction should
+shorten the mixing length. Open question / main risk: do the fine fractal scales
+survive molecular diffusion long enough to help, and is there an optimal N?
+
+This `torChannel` DNS code (incompressible, staggered-FD, PyTorch) was chosen as the
+Navier-Stokes base to probe the **Re-dependent advective mechanism** (proposal Eq. 5)
+that a pure-diffusion model cannot capture.
+
+## What was built on branch `feature/passive-scalar`
+
+1. **`scalar.py`** — passive scalar transport (concentration c in [0,1]) at cell
+   centres: conservative flux-form advection + IMEX diffusion with D = nu/Sc, periodic
+   in x,y, configurable wall BC in z (`neumann` no-flux default for mixing/decay
+   studies; or `dirichlet`). Wired into the time loop via `ChannelFlow.advance_scalar`.
+2. **Koch fractal IC** — `scalar.init_type: 'koch'` builds a generation-N Koch
+   interface (area-balanced zigzag generator) in the (z,y) cross-section, homogeneous
+   in streamwise x. N=0 is the flat baseline.
+3. **`scripts/run_mixing.py`** — temporal-mixing driver: evolves the scalar, records
+   the intensity of segregation M(t)=std(c)/std_max, extracts t_mix (first M<0.05) and
+   L_mix = U_bulk * t_mix, and plots M(t) per N.
+4. **`tests/test_scalar.py`** — verification (all pass): pure-diffusion vs analytic
+   erf (D_eff/D - 1 = -0.004%, i.e. ZERO numerical diffusion), mean conservation to
+   machine precision, pure advection over one period (variance preserved to 0.04%).
+5. Configs: `configs/scalar_mix_test.yaml`, `configs/koch_mix_demo.yaml`.
+
+## Result so far
+
+Laminar plain-channel demo (Re=20, Sc=1): **L_mix = 14.5 / 14.7 / 14.7 for N=0/1/2 —
+identical.** A 3D DNS confirmation that a fractal interface gives NO mixing benefit in
+unidirectional laminar flow: there is no transverse velocity to fold it, so only
+diffusion acts (lowest-mode decay M ~ exp(-D k^2 t)). This is the control; a real
+benefit needs an advective folding mechanism.
+
+## Key architectural constraint (important)
+
+The pressure Poisson solve (`projection_fft.py`) is **FFT-based and tied to PERIODICITY
+in x and y**. Consequences for extending the code:
+- Keeping the periodic box (e.g. **volume-penalization immersed boundary** for a
+  fractal/corrugated wall) is MODERATE effort — the FFT-Poisson still works.
+- Anything that BREAKS periodicity (inflow/outflow, a real **T-junction**) needs
+  REPLACING the pressure solver (multigrid or sparse direct) + inflow/outflow BCs +
+  dropping the bulk-flow forcing — a partial rewrite (weeks). Note the proposal's
+  "baffle" variant leaves the downstream channel straight and only sets the interface
+  at the junction plane, so the full T-junction geometry may be unnecessary.
+- Turbulence only sustains at Re_bulk > ~1000 (Re_tau > ~180), far above microfluidic
+  Re (1-200); a turbulent run tests the proposal's TNTI-entrainment ANALOGY, not the
+  device, and needs a GPU/HPC (infeasible on a CPU-only machine).
+
+## Paused — next direction (pick one)
+
+- **(A) Corrugated wall via volume-penalization IB** — laminar, device-faithful
+  (Eq. 5 surface mechanism), keeps the periodic box so FFT-Poisson still works, runs
+  on modest hardware. *Recommended.*
+- **(B) 'vortices' transient-secondary-flow demo** — cheap illustration that advection
+  folds the interface (not sustained, not the device).
+- **(C) Turbulent case** (perturbation init at Re_tau~180 + fractal scalar IC) on
+  GPU/HPC — tests the TNTI analogy.
+
+Also pending: a literature review of numerical requirements for microfluidic mixing
+(high-Schmidt-number false-diffusion pitfall, grid-Peclet criteria, schemes,
+validation) — see the project notes on the original workstation if available.
+
+## Running on GPU/SLURM
+
+Set `compute: {device: cuda}` in the config, then `sbatch launch.sh` (check the
+`#SBATCH` lines and the config name inside it). Quick check: `python tests/test_scalar.py`.
+Mixing run: `python scripts/run_mixing.py configs/koch_mix_demo.yaml --Ns 0 1 2`.
