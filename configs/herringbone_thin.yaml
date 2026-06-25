@@ -1,0 +1,59 @@
+# Phase-5: THIN-channel staggered herringbone. Fixes the Phase-4 masking factor #2
+# (in a tall Lz=2 box the groove-driven folding only reaches z<~0.8, so L_mix was
+# set by background diffusion of the gravest mode of the unstirred upper channel).
+# Here Lz=1.0 with grooves up to z~0.43, so the chaotic secondary flow stirs the
+# WHOLE gap and L_mix reflects groove mixing -> a fair test of the fractal claim.
+grid:   {nx: 48, ny: 48, nz: 48}
+domain: {Lx: 3.1416, Ly: 3.1416, Lz: 1.0}
+
+flow:
+  Re: 50.0
+  Re_tau: 10.0
+  U_bulk: 1.0
+  gamma: 0.4
+
+initialization:
+  type: "parabolic"
+  perturbation_intensity: 0.0
+
+solver: {type: "fft"}
+
+time:
+  dt: 0.006
+  n_steps: 3000
+  t_max: 100000.0
+  CFL_target: 0.25
+  dt_update_interval: 0
+  dt_max: 0.02
+  dt_min: 0.0001
+  scheme: "IMEX"
+
+compute: {device: "cuda"}
+
+output:
+  results_folder: /tmp/torchannel_herring_thin
+  n_out: 100000
+  n_save: 100000
+
+statistics: {enabled: false, n_stats: 0}
+
+immersed:
+  enabled: true
+  kind: "herringbone"
+  h0: 0.25
+  A: 0.18           # ridges span z in [0.07, 0.43] -> fills most of the Lz=1 gap
+  n_waves_x: 3
+  n_waves_y: 1
+  apex_frac: 0.35
+  stagger: true
+  eta: 1.0e-4
+
+scalar:
+  enabled: false
+  Sc: 1.0
+  wall_bc: "neumann"
+  init_type: "koch"
+  N: 0
+  r: 3.0
+  eps_cells: 1.0
+  theta: 0.5

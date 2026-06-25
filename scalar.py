@@ -225,6 +225,10 @@ def koch_interface_yz(y_c: np.ndarray, z_c: np.ndarray, Ly: float, Lz: float,
     The base interface runs wall-to-wall in z at y = Ly/2 and is Koch-folded in y
     (generation N). Returns c(y, z) of shape (len(y_c), len(z_c)) via a smoothed
     signed distance, c = 1/2 (1 + tanh(phi/eps)).
+
+    NOTE: this single-interface field is NOT periodic in y — c jumps 0->1 across the
+    y = 0/Ly seam, which adds a spurious flat interface in a periodic box. Use
+    `koch_strip_yz` for a seam-free initial condition.
     """
     motif = _zigzag_motif(r)
     # base spans z in [0, Lz] at y = Ly/2; coordinates ordered (z, y)
@@ -233,6 +237,28 @@ def koch_interface_yz(y_c: np.ndarray, z_c: np.ndarray, Ly: float, Lz: float,
     pts = np.stack([ZZ.ravel(), YY.ravel()], axis=1)
     phi = _signed_distance(pts, poly).reshape(len(y_c), len(z_c))
     return 0.5 * (1.0 + np.tanh(phi / eps))
+
+
+def koch_strip_yz(y_c: np.ndarray, z_c: np.ndarray, Ly: float, Lz: float,
+                  N: int, r: float, eps: float, width_frac: float = 0.5) -> np.ndarray:
+    """Seam-free Koch initial condition: a c=1 strip with TWO Koch-folded edges.
+
+    A band of width `width_frac*Ly` centred at y = Ly/2 is filled with c=1; both of
+    its edges (at y = Ly/2 -/+ width) run wall-to-wall in z and are Koch-folded in y
+    (generation N). c -> 0 at y = 0 and y = Ly, so the field is PERIODIC in y with no
+    spurious seam interface, while still carrying the fractal interfacial area (now on
+    two interfaces). Mean(c) ~ width_frac. Returns c(y, z), shape (len(y_c), len(z_c)).
+    """
+    motif = _zigzag_motif(r)
+    half = 0.5 * width_frac * Ly
+    poly_lo = _koch_polyline(motif, N, base=((0.0, Ly / 2.0 - half), (Lz, Ly / 2.0 - half)))
+    poly_hi = _koch_polyline(motif, N, base=((0.0, Ly / 2.0 + half), (Lz, Ly / 2.0 + half)))
+    ZZ, YY = np.meshgrid(z_c, y_c, indexing="xy")
+    pts = np.stack([ZZ.ravel(), YY.ravel()], axis=1)
+    phi_lo = _signed_distance(pts, poly_lo).reshape(len(y_c), len(z_c))  # >0 above lower edge
+    phi_hi = _signed_distance(pts, poly_hi).reshape(len(y_c), len(z_c))  # >0 above upper edge
+    # inside the strip: above the lower edge AND below the upper edge
+    return 0.5 * (1.0 + np.tanh(phi_lo / eps)) * 0.5 * (1.0 + np.tanh(-phi_hi / eps))
 
 
 # ---------------------------------------------------------------------------
@@ -260,12 +286,15 @@ def initialize_scalar(nx: int, ny: int, nz: int, z_c: torch.Tensor,
         c[:] = interface_pos
         return c
 
-    if init_type == 'koch':
+    if init_type in ('koch', 'koch_strip'):
         dy = Ly / ny
         y_c = (np.arange(ny + 2) - 0.5) * dy
         z_c_np = z_c.detach().cpu().numpy()
         eps = eps_cells * min(dy, Lz / nz)
-        prof = koch_interface_yz(y_c, z_c_np, Ly, Lz, N=N, r=r, eps=eps)  # (ny+2, nz+2)
+        if init_type == 'koch_strip':
+            prof = koch_strip_yz(y_c, z_c_np, Ly, Lz, N=N, r=r, eps=eps)
+        else:
+            prof = koch_interface_yz(y_c, z_c_np, Ly, Lz, N=N, r=r, eps=eps)  # (ny+2, nz+2)
         c[:, :, :] = torch.tensor(prof, device=device, dtype=torch.float64)[None, :, :]
         return c
 
@@ -310,6 +339,28 @@ def scalar_stats(c: torch.Tensor, nx: int, ny: int, nz: int,
     std_max = torch.sqrt(torch.clamp(mean * (1.0 - mean), min=1e-30))
     return {"mean": float(mean), "var": float(var), "std": float(std),
             "M": float(std / std_max)}
+
+
+def scalar_dissipation(c: torch.Tensor, nx: int, ny: int, nz: int,
+                       dx: float, dy: float, dz_f: torch.Tensor,
+                       chi_c: torch.Tensor = None) -> float:
+    """Volume-weighted mean square scalar gradient <|grad c|^2>.
+
+    The (un-scaled by D) scalar dissipation rate. Unlike the variance-based M,
+    this is sensitive to INTERFACIAL AREA: a higher Koch generation has more
+    interface, hence larger <|grad c|^2>, so it captures the fractal's effect that
+    a gravest-mode-dominated variance metric cannot. Central differences using the
+    ghost cells (call after apply_scalar_bc). Fluid-masked if chi_c is given.
+    """
+    gx = (c[2:nx+2, 1:ny+1, 1:nz+1] - c[0:nx, 1:ny+1, 1:nz+1]) / (2.0 * dx)
+    gy = (c[1:nx+1, 2:ny+2, 1:nz+1] - c[1:nx+1, 0:ny, 1:nz+1]) / (2.0 * dy)
+    dz2 = (dz_f[0:nz] + 0.0).view(1, 1, -1)
+    gz = (c[1:nx+1, 1:ny+1, 2:nz+2] - c[1:nx+1, 1:ny+1, 0:nz]) / (2.0 * dz2)
+    g2 = gx**2 + gy**2 + gz**2
+    wz = dz_f[0:nz].view(1, 1, -1).expand_as(g2).clone()
+    if chi_c is not None:
+        wz = wz * (1.0 - chi_c[1:nx+1, 1:ny+1, 1:nz+1])
+    return float((g2 * wz).sum() / wz.sum())
 
 
 def save_scalar_field(c: torch.Tensor, results_folder: str, filename: str,

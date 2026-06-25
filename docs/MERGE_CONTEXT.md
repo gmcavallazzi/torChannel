@@ -61,7 +61,33 @@ in x and y**. Consequences for extending the code:
   Re (1-200); a turbulent run tests the proposal's TNTI-entrainment ANALOGY, not the
   device, and needs a GPU/HPC (infeasible on a CPU-only machine).
 
-## Active direction: (A) corrugated wall via volume-penalization IB
+## MAJOR PIVOT: framing flaw found -> moved definitive test to CaNS
+
+A deep audit (prompted by "is it resolved / are parameters wiping out the effect?")
+showed the torChannel results are largely a FRAMING ARTIFACT, not a physics refutation:
+- Koch IC resolution is FINE (N=1/2 capture 99%/91% of the fractal interfacial area).
+- But the metric is structurally blind to N: initial M is ~identical across N
+  (0.997/0.991/0.988) — the fractal carries negligible variance; the variance-based M
+  decaying in a PERIODIC box is dominated by the gravest mode (set by the box), N-insensitive.
+- Spanwise PERIODICITY adds a spurious flat seam interface (c jumps 0->1 at y=0/Ly).
+- The area-sensitive observable, scalar dissipation <|grad c|^2>, IS N-sensitive
+  (1.0/1.98/2.08x) — so the right observable + a seam-free geometry are needed.
+
+Fix = **CaNS** (`/home/giorgio/CaNS`, fresh clone, built on the GB10): a DUCT has walls
+in y AND z (no spanwise seam), built-in scalar transport, GPU. See memory `cans-gb10-build`.
+WORKING case `run_merge/` (periodic duct + passive Koch scalar, GPU): added `iniscal='koc'`
+(reads data/scalar_ic.bin from `utils/gen_koch_ic.py`, reuses our koch_interface_yz) and a
+`mixing_stats` diagnostic writing data/mixing_s_001.out = [time, M, var, chi=<|grad c|^2>].
+Verified end-to-end on GPU: M and chi both decay. CaNS limitation: developing (inflow/outflow)
+duct = spatial mixing length is CPU-ONLY (GPU only supports periodic streamwise); CaNS has
+NO immersed boundary (patterned wall would need penalization ported to Fortran).
+NEXT in CaNS: N-sweep comparing chi(t) & M(t) across N=0/1/2; then high Sc; folding needs a
+turbulent duct or a ported penalization wall.
+
+torChannel additions kept for the record: seam-free `koch_strip` IC + `scalar_dissipation`
+in scalar.py (the cheap reframe, now superseded by the CaNS duct).
+
+## Active direction (superseded by CaNS pivot above): (A) corrugated wall via volume-penalization IB
 
 On a GPU+SLURM machine (NVIDIA GB10), pursuing **option (A)** with a staged Schmidt
 plan (validate the mechanism at Sc~1-10 with cell-Pe<=2, then push Sc~100-1000 on the
