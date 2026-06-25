@@ -315,6 +315,7 @@ class ChannelFlow:
                     init_type=scalar_config.get('init_type', 'interface_z'),
                     interface_pos=scalar_config.get('interface_pos', 0.5),
                     eps_cells=scalar_config.get('eps_cells', 1.0),
+                    N=scalar_config.get('N', 0), r=scalar_config.get('r', 3.0),
                     device=self.device)
             apply_scalar_bc(self.scalar, self.scalar_wall_bc)
             s0 = scalar_stats(self.scalar, self.nx, self.ny, self.nz, self.dz_f)

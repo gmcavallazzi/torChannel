@@ -1,0 +1,45 @@
+# Laminar channel + Koch-interface passive scalar — mixing-decay demonstration.
+# Small/cheap; the driver (scripts/run_mixing.py) overrides scalar.N and steps it.
+grid:   {nx: 8, ny: 64, nz: 48}   # x homogeneous (cheap); y=fold direction; z wall-normal
+domain: {Lx: 3.1416, Ly: 3.1416, Lz: 2.0}
+
+flow:
+  Re: 20.0          # laminar bulk Reynolds
+  Re_tau: 5.0       # nominal (statistics only)
+  U_bulk: 1.0
+  gamma: 0.6        # mild wall-normal stretching (laminar: no near-wall clustering needed)
+
+initialization:
+  type: "parabolic"
+  perturbation_intensity: 0.0
+
+solver: {type: "fft"}
+
+time:
+  dt: 0.008                # under the AB2 explicit-diffusion limit (~0.012)
+  n_steps: 100000
+  t_max: 100000.0
+  CFL_target: 0.25
+  dt_update_interval: 0    # fixed dt
+  dt_max: 0.02
+  dt_min: 0.0001
+  scheme: "IMEX"
+
+compute: {device: "cpu"}
+
+output:
+  results_folder: /tmp/torchannel_mixing
+  n_out: 100000
+  n_save: 100000
+
+statistics: {enabled: false, n_stats: 0}
+
+scalar:
+  enabled: true
+  Sc: 1.0
+  wall_bc: "neumann"
+  init_type: "koch"
+  N: 0                # overridden per-run by the driver
+  r: 3.0
+  eps_cells: 1.0
+  theta: 0.5

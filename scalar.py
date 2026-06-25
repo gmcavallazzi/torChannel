@@ -163,12 +163,85 @@ def solve_implicit_diffusion_scalar(c: torch.Tensor, dt: float,
 
 
 # ---------------------------------------------------------------------------
+# Koch fractal interface (cross-section)
+# ---------------------------------------------------------------------------
+def _zigzag_motif(r: float) -> np.ndarray:
+    """Area-balanced 4-segment Koch generator, each segment of length 1/r.
+
+    D_f = log(4)/log(r). Valid for 1 < r < 4. Every outward triangle is matched
+    by an equal inward indentation, so the interface keeps the 50/50 split.
+    """
+    if not (1.0 < r < 4.0):
+        raise ValueError(f"zigzag motif needs 1 < r < 4, got r={r}")
+    a = np.sqrt((1.0 / r) ** 2 - 0.25 ** 2)
+    return np.array([[0.0, 0.0], [0.25, a], [0.5, 0.0], [0.75, -a], [1.0, 0.0]])
+
+
+def _koch_polyline(motif: np.ndarray, N: int,
+                   base=((0.0, 0.0), (1.0, 0.0))) -> np.ndarray:
+    """Generation-N Koch polyline by affine edge replacement (vectorised)."""
+    pts = np.array(base, dtype=float)
+    if N <= 0:
+        return pts
+    mx, my = motif[:, 0], motif[:, 1]
+    for _ in range(N):
+        p0, p1 = pts[:-1], pts[1:]
+        d = p1 - p0
+        perp = np.stack([-d[:, 1], d[:, 0]], axis=1)
+        new = (p0[:, None, :] + mx[None, :, None] * d[:, None, :]
+               + my[None, :, None] * perp[:, None, :])  # (S, K, 2)
+        pts = np.concatenate([new[:, :-1, :].reshape(-1, 2), pts[-1:][None, 0]], 0)
+    return pts
+
+
+def _signed_distance(points: np.ndarray, polyline: np.ndarray,
+                     chunk: int = 8192) -> np.ndarray:
+    """Signed distance from each point to an open polyline (sign = nearest side)."""
+    A, B = polyline[:-1], polyline[1:]
+    AB = B - A
+    L2 = np.einsum("sk,sk->s", AB, AB)
+    L2 = np.where(L2 == 0.0, 1.0, L2)
+    out = np.empty(points.shape[0])
+    for lo in range(0, points.shape[0], chunk):
+        G = points[lo:lo + chunk]
+        AP = G[:, None, :] - A[None, :, :]
+        t = np.clip(np.einsum("csk,sk->cs", AP, AB) / L2, 0.0, 1.0)
+        closest = A[None, :, :] + t[:, :, None] * AB[None, :, :]
+        diff = G[:, None, :] - closest
+        dist = np.sqrt(np.einsum("csk,csk->cs", diff, diff))
+        cross = AB[None, :, 0] * AP[:, :, 1] - AB[None, :, 1] * AP[:, :, 0]
+        j = np.argmin(dist, axis=1)
+        rows = np.arange(G.shape[0])
+        sign = np.sign(cross[rows, j])
+        sign = np.where(sign == 0.0, 1.0, sign)
+        out[lo:lo + chunk] = dist[rows, j] * sign
+    return out
+
+
+def koch_interface_yz(y_c: np.ndarray, z_c: np.ndarray, Ly: float, Lz: float,
+                      N: int, r: float, eps: float) -> np.ndarray:
+    """Rasterise a Koch interface in the (z, y) cross-section.
+
+    The base interface runs wall-to-wall in z at y = Ly/2 and is Koch-folded in y
+    (generation N). Returns c(y, z) of shape (len(y_c), len(z_c)) via a smoothed
+    signed distance, c = 1/2 (1 + tanh(phi/eps)).
+    """
+    motif = _zigzag_motif(r)
+    # base spans z in [0, Lz] at y = Ly/2; coordinates ordered (z, y)
+    poly = _koch_polyline(motif, N, base=((0.0, Ly / 2.0), (Lz, Ly / 2.0)))
+    ZZ, YY = np.meshgrid(z_c, y_c, indexing="xy")   # YY,ZZ shape (len(y), len(z))
+    pts = np.stack([ZZ.ravel(), YY.ravel()], axis=1)
+    phi = _signed_distance(pts, poly).reshape(len(y_c), len(z_c))
+    return 0.5 * (1.0 + np.tanh(phi / eps))
+
+
+# ---------------------------------------------------------------------------
 # Initial conditions
 # ---------------------------------------------------------------------------
 def initialize_scalar(nx: int, ny: int, nz: int, z_c: torch.Tensor,
                       Lx: float, Ly: float, Lz: float, init_type: str = 'interface_z',
                       interface_pos: float = 0.5, eps_cells: float = 1.0,
-                      device: str = 'cpu') -> torch.Tensor:
+                      N: int = 0, r: float = 3.0, device: str = 'cpu') -> torch.Tensor:
     """Create the initial scalar field (nx+2, ny+2, nz+2).
 
     init_types:
@@ -176,12 +249,24 @@ def initialize_scalar(nx: int, ny: int, nz: int, z_c: torch.Tensor,
                         tanh-smoothed. Reduces to pure z-diffusion (erf) when u=0.
         'interface_y' : split across the span at y = interface_pos*Ly (two
                         co-flowing streams meeting on the centreline).
+        'koch'        : Koch-fractal interface (generation N, ratio r) in the
+                        (z, y) cross-section, homogeneous in streamwise x. N=0
+                        reduces to the flat 'interface_y' baseline.
         'uniform'     : c = interface_pos everywhere (constant-field test).
     """
     c = torch.zeros(nx + 2, ny + 2, nz + 2, device=device, dtype=torch.float64)
 
     if init_type == 'uniform':
         c[:] = interface_pos
+        return c
+
+    if init_type == 'koch':
+        dy = Ly / ny
+        y_c = (np.arange(ny + 2) - 0.5) * dy
+        z_c_np = z_c.detach().cpu().numpy()
+        eps = eps_cells * min(dy, Lz / nz)
+        prof = koch_interface_yz(y_c, z_c_np, Ly, Lz, N=N, r=r, eps=eps)  # (ny+2, nz+2)
+        c[:, :, :] = torch.tensor(prof, device=device, dtype=torch.float64)[None, :, :]
         return c
 
     if init_type == 'interface_z':
