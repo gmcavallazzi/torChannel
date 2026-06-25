@@ -123,7 +123,49 @@ GPU to hit the open DNS niche). Geometry: **oblique grooves first**, herringbone
     `results/figures/mixing_decay_corrugated{,_Sc4}.png` (persistent, git-ignored).
   - This is the proposal's central risk confirmed for a steady laminar secondary flow.
 
-## Recommended next (Phase 4): chaotic folding (staggered herringbone)
+## Phase 4 — DONE (herringbone built); plus a RESOLUTION/PARAMETER AUDIT
+
+Staggered-herringbone (SHM) geometry added: `immersed.py` kind='herringbone'
+(chevron grooves, off-centre apex, apex side flips every streamwise cycle ->
+alternating counter-rotating rolls = chaotic-advection potential). `solver.py`
+plumbs apex_frac/stagger; `configs/herringbone_channel.yaml` (nx=48, h0=0.30,
+A=0.20, 3 chevron cycles). Geometry + flow verified (mask map + (y,z)
+recirculation figures in results/figures/).
+
+- Herringbone Koch N-sweep, Sc=1: **L_mix = 36.0/35.8/35.8 — FLAT** (no benefit,
+  no penalty). Crucially N=0 (36.0) is NO faster than the oblique-groove N=0 (33.8)
+  despite a completely different flow.
+
+### Audit (prompted by "is it resolved / are parameters wiping out the effect?")
+- **Spatial resolution OK (not the cause).** On-grid Koch interfacial length
+  (integral |grad c|) vs a refined ny=384 reference resolves **N=1: 99%, N=2: 91%**
+  of the true fractal area — the extra interface really is in the IC. (N>=3 aliases;
+  do not use.)
+- **No hidden early-time benefit.** Time to M=0.5/0.2/0.1/0.05 is identical or
+  slightly worse for N>0 at every threshold (Sc=4 oblique): not a tail artifact.
+- **Real masking factor #1 — Sc too low.** At Sc<=4 the finest N=2 striations
+  (~0.13 wide) diffuse away in t~w^2/D ~ 1-3 t.u. out of t_mix~36-84 — gone in a few
+  % of the run. The proposal's regime is Sc~1e3; unreachable here without a TVD
+  scalar + much finer grid (Sc=10 already wiggled, overshoot 0.20).
+- **Real masking factor #2 — folding localized in a tall box.** Grooves influence
+  z<~0.8 but the channel is Lz=2 and the interface spans the full height; the global
+  M is set by the gravest DIFFUSIVE mode of the unstirred upper ~60% (~Lz^2/pi^2 D),
+  which is why both geometries and all N collapse to L_mix~34-36 at Sc=1. We are
+  measuring background diffusion, not mixing enhancement.
+
+**Conclusion:** the negative result is solid *within the accessible low-Pe,
+floor-stirred regime*, but that regime is stacked against the proposal — it has NOT
+been fairly tested in its intended high-Pe, fully-stirred chaotic regime.
+
+### Next (Phase 5): give the mechanism a fair test
+1. **Thin channel** (Lz ~ 0.8-1.0, grooves filling the gap) so the chaotic flow
+   stirs the WHOLE domain and the gravest mode IS the stirred scale — fixes #2 cheaply.
+2. Then **high Sc with a TVD/flux-limited scalar** so fine scales survive — fixes #1
+   (the expensive, decisive step).
+
+---
+
+## (superseded) earlier recommendation — chaotic folding (staggered herringbone)
 
 The remaining FAIR test of the proposal is a CHAOTIC advection flow (exponential
 stretching), which is what real passive micromixers (SHM) use and what the fractal

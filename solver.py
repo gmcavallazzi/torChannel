@@ -316,6 +316,11 @@ class ChannelFlow:
                 A=ib_config.get('A', 0.1),
                 kx=2.0 * np.pi * n_x / self.Lx,
                 ky=2.0 * np.pi * n_y / self.Ly,
+                # herringbone geometry (ignored by slab/grooves; Lx,Ly injected
+                # by build_masks so they are not duplicated here)
+                n_waves_x=n_x, n_waves_y=n_y,
+                apex_frac=ib_config.get('apex_frac', 0.5),
+                stagger=ib_config.get('stagger', True),
             )
             self.ib_masks = build_masks(self.nx, self.ny, self.nz,
                                         self.Lx, self.Ly, self.Lz,

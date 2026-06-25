@@ -55,16 +55,41 @@ def _coords(nx, ny, nz, Lx, Ly, z_c, z_f, device):
     return xc, xf, yc, yf, zc, zf
 
 
-def height_field(x, y, kind='slab', z1=0.2, h0=0.2, A=0.1, kx=1.0, ky=1.0):
+def height_field(x, y, kind='slab', z1=0.2, h0=0.2, A=0.1, kx=1.0, ky=1.0,
+                 Lx=1.0, Ly=1.0, n_waves_x=2, n_waves_y=1,
+                 apex_frac=0.5, stagger=True):
     """Solid-region height h(x, y); a point is solid where its z < h(x, y).
 
-    x, y are broadcast together (e.g. meshgrid). kx, ky are wavenumbers in
-    rad / length already (caller converts n_waves -> 2*pi*n/L).
+    x, y are broadcast together (e.g. meshgrid). For 'grooves', kx, ky are
+    angular wavenumbers (caller converts n_waves -> 2*pi*n/L).
+
+    'herringbone' builds a STAGGERED chevron-groove floor (the SHM geometry that
+    drives chaotic advection): within each streamwise cycle the groove crests bend
+    into a V at y = apex_frac*Ly; the apex side flips every cycle (stagger), so the
+    two counter-rotating helical rolls alternate along x — the exponential
+    stretch/fold a single oblique groove cannot give.
     """
     if kind == 'slab':
         return torch.full_like(x + y, float(z1))
     if kind == 'grooves':
         return h0 + A * torch.sin(kx * x + ky * y)
+    if kind == 'herringbone':
+        period_x = Lx / n_waves_x
+        cyc = torch.floor(x / period_x)
+        xloc = x / period_x - cyc                       # in [0,1) within a cycle
+        if stagger:
+            apex = torch.where((cyc.long() % 2) == 0,
+                               torch.full_like(x, apex_frac),
+                               torch.full_like(x, 1.0 - apex_frac))
+        else:
+            apex = torch.full_like(x, apex_frac)
+        ya = apex * Ly
+        # triangle wave in y peaking (=1) at the apex, 0 at y=0 and y=Ly (so the
+        # field stays periodic in y); this bends the streamwise ridges into chevrons.
+        tri = torch.where(y < ya, y / ya.clamp(min=1e-9),
+                          (Ly - y) / (Ly - ya).clamp(min=1e-9))
+        phase = 2.0 * np.pi * xloc - np.pi * n_waves_y * tri
+        return h0 + A * torch.cos(phase)
     raise ValueError(f"unknown immersed height kind {kind!r}")
 
 
@@ -80,7 +105,7 @@ def build_masks(nx, ny, nz, Lx, Ly, Lz, z_c, z_f, device='cpu', **hf):
     def mask(xv, yv, zv):
         # h on the (x, y) plane of this location, then compare to z (broadcast).
         X, Y = torch.meshgrid(xv, yv, indexing='ij')          # (Nx, Ny)
-        H = height_field(X, Y, **hf)                           # (Nx, Ny)
+        H = height_field(X, Y, Lx=Lx, Ly=Ly, **hf)            # (Nx, Ny)
         return (zv.view(1, 1, -1) < H.unsqueeze(-1)).to(torch.float64)
 
     return {

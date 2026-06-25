@@ -1,0 +1,59 @@
+# Phase-4: staggered-herringbone (SHM) bottom wall via volume penalization.
+# Chevron grooves whose apex side flips every streamwise cycle -> alternating
+# counter-rotating helical rolls -> chaotic advection (exponential stretch/fold),
+# the regime the proposal's fractal claim actually needs. Stronger amplitude than
+# the single oblique groove (Phase 1).
+grid:   {nx: 48, ny: 48, nz: 48}
+domain: {Lx: 3.1416, Ly: 3.1416, Lz: 2.0}
+
+flow:
+  Re: 50.0
+  Re_tau: 10.0
+  U_bulk: 1.0
+  gamma: 0.4
+
+initialization:
+  type: "parabolic"
+  perturbation_intensity: 0.0
+
+solver: {type: "fft"}
+
+time:
+  dt: 0.006
+  n_steps: 3000
+  t_max: 100000.0
+  CFL_target: 0.25
+  dt_update_interval: 0
+  dt_max: 0.02
+  dt_min: 0.0001
+  scheme: "IMEX"
+
+compute: {device: "cuda"}
+
+output:
+  results_folder: /tmp/torchannel_herringbone
+  n_out: 100000
+  n_save: 100000
+
+statistics: {enabled: false, n_stats: 0}
+
+immersed:
+  enabled: true
+  kind: "herringbone"
+  h0: 0.30
+  A: 0.20           # stronger folding than Phase 1 (ridges up to z~0.5)
+  n_waves_x: 3      # 3 chevron cycles along x (apex side staggers each cycle)
+  n_waves_y: 1
+  apex_frac: 0.35   # off-centre apex -> asymmetric rolls (SHM signature)
+  stagger: true
+  eta: 1.0e-4
+
+scalar:
+  enabled: false
+  Sc: 1.0
+  wall_bc: "neumann"
+  init_type: "koch"
+  N: 0
+  r: 3.0
+  eps_cells: 1.0
+  theta: 0.5
