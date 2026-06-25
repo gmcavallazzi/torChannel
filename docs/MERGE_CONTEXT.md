@@ -93,9 +93,23 @@ GPU to hit the open DNS niche). Geometry: **oblique grooves first**, herringbone
     (no body-fitted reference, as the lit review flagged).
   - GPU note: run with `PYTORCH_JIT=0` on the GB10 (JIT nvrtc can't target sm_121;
     eager cuFFT/aten kernels work — verified). The capability UserWarning is benign.
-- **Phase 2 — NEXT.** Koch scalar in the corrugated box; fluid-masked M-diagnostic; measure
-  L_mix vs N; report cell-Pe=U*dx/D each run; add TVD scalar only if wiggles appear.
-- **Phase 3.** GPU production: resolution/Sc study, L_mix(N) curve, test r^{-D_f N} scaling.
+- **Phase 2 — DONE (null result at Sc=1).** Koch scalar advected by the corrugated
+  secondary flow; N sweep measured.
+  - `scalar.py`: `scalar_stats` takes an optional `chi_c` so the M-diagnostic counts
+    FLUID cells only. `scripts/run_mixing.py`: passes chi_c when immersed, reports
+    cell-Pe=U*dx/D, tracks min/max(c) for dispersive wiggles, usetex via TORCHANNEL_USETEX
+    (default 1; `module load texlive` on the HPC). `configs/corrugated_channel.yaml`
+    scalar block (Sc=1, neumann, koch, r=3).
+  - Result (Re=50, Sc=1, cell-Pe=4.9, ZERO overshoot so no TVD needed):
+    **L_mix = 33.8 / 35.0 / 35.1 for N=0/1/2 — flat (marginally WORSE with N).**
+    Even WITH secondary flow, no fractal benefit at Sc=1: the decay is diffusion-limited
+    (dominated by the slowest large-scale mode), and the fine fractal scales diffuse away
+    before the (weak, f_perp~1.7e-3) secondary flow can fold them. This is the proposal's
+    stated central risk made concrete, and motivates Phase 3.
+  - Figure: `results/figures/mixing_decay_corrugated.png` (persistent, git-ignored).
+- **Phase 3 — NEXT.** GPU production: push to HIGH Sc (where fine scales survive) +
+  resolution to keep cell-Pe controlled; possibly stronger grooves / herringbone; test
+  whether L_mix(N) then drops and follows r^{-D_f N}. This is the decisive test.
 
 ### Other options (not being pursued now)
 - **(B) 'vortices' transient-secondary-flow demo** — cheap illustration that advection

@@ -289,16 +289,20 @@ def initialize_scalar(nx: int, ny: int, nz: int, z_c: torch.Tensor,
 # Diagnostics & I/O
 # ---------------------------------------------------------------------------
 def scalar_stats(c: torch.Tensor, nx: int, ny: int, nz: int,
-                 dz_f: torch.Tensor) -> dict:
+                 dz_f: torch.Tensor, chi_c: torch.Tensor = None) -> dict:
     """Volume-weighted mean and variance (intensity of segregation) of c.
 
     Weights cells by their (stretched) z-height so the measure is the true volume
     average. Returns mean, var and the normalised mixedness M = std/std_max with
-    std_max = sqrt(mean*(1-mean)).
+    std_max = sqrt(mean*(1-mean)). If `chi_c` (cell-centre solid mask, 1 in solid)
+    is given, only FLUID cells contribute — the right measure with an immersed
+    boundary, where scalar that diffuses into the solid is not real mixing.
     """
     ci = c[1:nx+1, 1:ny+1, 1:nz+1]
     wz = dz_f[0:nz].view(1, 1, -1)
-    vol = wz.expand_as(ci)
+    vol = wz.expand_as(ci).clone()
+    if chi_c is not None:
+        vol = vol * (1.0 - chi_c[1:nx+1, 1:ny+1, 1:nz+1])
     total = vol.sum()
     mean = (ci * vol).sum() / total
     var = (((ci - mean) ** 2) * vol).sum() / total

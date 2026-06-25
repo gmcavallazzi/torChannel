@@ -47,4 +47,11 @@ immersed:
   eta: 1.0e-4
 
 scalar:
-  enabled: false    # Phase 1: pure flow; Phase 2 sets this true with init_type koch
+  enabled: false    # Phase 1: pure flow; the mixing driver sets this true per-run
+  Sc: 1.0           # Phase 2 device-faithful start (cell-Pe stays O(5); see report)
+  wall_bc: "neumann"
+  init_type: "koch"
+  N: 0              # overridden per-run by scripts/run_mixing.py
+  r: 3.0
+  eps_cells: 1.0
+  theta: 0.5

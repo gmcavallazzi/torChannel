@@ -35,9 +35,11 @@ import matplotlib.pyplot as plt
 from solver import ChannelFlow
 from scalar import scalar_stats
 
-# system LaTeX for all figure text
-plt.rcParams.update({"text.usetex": True, "font.family": "serif",
-                     "font.serif": ["Computer Modern Roman"],
+# System LaTeX for all figure text (HPC: `module load texlive` first). Set
+# TORCHANNEL_USETEX=0 to fall back to mathtext on machines without a TeX install.
+_usetex = os.environ.get("TORCHANNEL_USETEX", "1") == "1"
+plt.rcParams.update({"text.usetex": _usetex, "font.family": "serif",
+                     "font.serif": ["Computer Modern Roman"], "mathtext.fontset": "cm",
                      "axes.labelsize": 12, "axes.titlesize": 12, "legend.fontsize": 9})
 
 
@@ -55,16 +57,36 @@ def run_one(base_cfg, N, nsteps, sample_every, results_root):
 
     flow = ChannelFlow(cfg_path)
     U = flow.U_bulk
-    ts, Ms = [0.0], [scalar_stats(flow.scalar, flow.nx, flow.ny, flow.nz, flow.dz_f)['M']]
+    chi_c = flow.chi_c if getattr(flow, 'immersed_enabled', False) else None
+
+    # Report the cell-Peclet number (U*dx/D): the false-diffusion / dispersive-wiggle
+    # control parameter. Our scalar advection is 2nd-order central (zero false
+    # diffusion, certified) so cell-Pe > 2 risks dispersive over/undershoots, not
+    # artificial mixing; we watch min/max(c) for wiggles below.
+    D = flow.scalar_D
+    dz_min = float(flow.dz_f.min())
+    cell_pe = U * max(flow.dx, flow.dy, dz_min) / D
+    print(f"  N={N}: D={D:.2e}, cell-Pe={cell_pe:.1f} "
+          f"(dx={flow.dx:.3f}, dz_min={dz_min:.3f})", flush=True)
+
+    def M_of(c):
+        return scalar_stats(c, flow.nx, flow.ny, flow.nz, flow.dz_f, chi_c=chi_c)['M']
+
+    ts, Ms = [0.0], [M_of(flow.scalar)]
+    cmin, cmax = 1.0, 0.0
     for n in range(1, nsteps + 1):
         flow.step_imex(flow.dt)
         flow.time += flow.dt
         if n % sample_every == 0:
-            M = scalar_stats(flow.scalar, flow.nx, flow.ny, flow.nz, flow.dz_f)['M']
-            ts.append(flow.time); Ms.append(M)
+            ts.append(flow.time); Ms.append(M_of(flow.scalar))
+            cmin = min(cmin, float(flow.scalar.min()))
+            cmax = max(cmax, float(flow.scalar.max()))
             if torch.isnan(flow.scalar).any():
                 print(f"  N={N}: NaN at step {n}", flush=True); break
     ts, Ms = np.array(ts), np.array(Ms)
+    overshoot = max(0.0, cmax - 1.0) + max(0.0, -cmin)
+    print(f"  N={N}: c in [{cmin:.3f}, {cmax:.3f}]  overshoot={overshoot:.2e}"
+          f"{'  <-- WIGGLES (consider TVD)' if overshoot > 0.05 else ''}", flush=True)
 
     # mixing time: first crossing of M = thresh (linear interpolation)
     thresh = flow.Mthresh if hasattr(flow, 'Mthresh') else 0.05
