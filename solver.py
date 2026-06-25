@@ -9,6 +9,9 @@ from operators import diffusion_u, diffusion_v, diffusion_w, advection_u, advect
 from projection import build_poisson_matrix, solve_poisson, project_velocity
 from projection_fft import initialize_fft_solver, solve_poisson_fft
 from turbstats import TurbulenceStats
+from scalar import (apply_scalar_bc, advection_scalar, diffusion_xy_scalar,
+                    solve_implicit_diffusion_scalar, initialize_scalar,
+                    scalar_stats, save_scalar_field, load_scalar_field)
 
 # Layer-2 torch.compile (see operators.py): also fuse the remaining per-step
 # helpers — divergence, bulk velocity, and the projection correction. Opt-in via
@@ -293,6 +296,34 @@ class ChannelFlow:
         else:
             raise ValueError(f"Unknown solver type: {self.solver_type}")
 
+        # ---- Passive scalar (optional) ----------------------------------
+        scalar_config = config.get('scalar', {})
+        self.scalar_enabled = scalar_config.get('enabled', False)
+        if self.scalar_enabled:
+            self.Sc = scalar_config.get('Sc', 1.0)
+            self.scalar_D = self.nu / self.Sc            # scalar diffusivity
+            self.scalar_wall_bc = scalar_config.get('wall_bc', 'neumann')
+            self.scalar_theta = scalar_config.get('theta', 0.5)
+            self.rhs_c_curr = None
+            self.rhs_c_prev = None
+            scalar_field_file = scalar_config.get('field_file', None)
+            if scalar_field_file is not None:
+                self.scalar = load_scalar_field(scalar_field_file, device=self.device)
+            else:
+                self.scalar = initialize_scalar(
+                    self.nx, self.ny, self.nz, self.z_c, self.Lx, self.Ly, self.Lz,
+                    init_type=scalar_config.get('init_type', 'interface_z'),
+                    interface_pos=scalar_config.get('interface_pos', 0.5),
+                    eps_cells=scalar_config.get('eps_cells', 1.0),
+                    device=self.device)
+            apply_scalar_bc(self.scalar, self.scalar_wall_bc)
+            s0 = scalar_stats(self.scalar, self.nx, self.ny, self.nz, self.dz_f)
+            print(f"Passive scalar enabled: Sc={self.Sc}, D={self.scalar_D:.3e}, "
+                  f"wall_bc={self.scalar_wall_bc}, init mean={s0['mean']:.4f}, "
+                  f"M={s0['M']:.4f}", flush=True)
+        else:
+            self.scalar = None
+
         # Initialize statistics collector if enabled (n_stats > 0)
         stats_config = config.get('statistics', {})
         self.n_stats = stats_config.get('n_stats', 0)
@@ -575,6 +606,9 @@ class ChannelFlow:
         # Reapply boundary conditions after projection
         self.apply_bc_uvw()  # Fused boundary conditions
 
+        if self.scalar_enabled:
+            self.advance_scalar(dt)
+
         return u_bulk_current, forcing
 
     def step_imex(self, dt):
@@ -707,7 +741,39 @@ class ChannelFlow:
         relaxation = 0.1
         self.forcing += (self.U_bulk - u_bulk_current) / dt * relaxation
 
+        # Advance the passive scalar on the now divergence-free velocity field.
+        if self.scalar_enabled:
+            self.advance_scalar(dt)
+
         return u_bulk_current, self.forcing
+
+    def advance_scalar(self, dt):
+        """One IMEX step of the passive scalar on the current velocity field.
+
+        Explicit (AB2): advection + in-plane diffusion. Implicit (theta-method):
+        wall-normal diffusion. Mirrors step_imex for the momentum equations. The
+        scalar is passive, so there is no projection.
+        """
+        D = self.scalar_D
+        apply_scalar_bc(self.scalar, self.scalar_wall_bc)
+
+        adv_c = advection_scalar(self.scalar, self.u, self.v, self.w,
+                                 self.nx, self.ny, self.nz, self.dx, self.dy, self.dz_f)
+        diff_xy_c = diffusion_xy_scalar(self.scalar, self.nx, self.ny, self.nz,
+                                        self.dx, self.dy, D)
+        rhs_c = diff_xy_c - adv_c
+
+        if self.rhs_c_prev is None:
+            self.scalar = self.scalar + dt * rhs_c
+        else:
+            self.scalar = self.scalar + dt * (1.5 * rhs_c - 0.5 * self.rhs_c_prev)
+        self.rhs_c_prev = rhs_c
+
+        apply_scalar_bc(self.scalar, self.scalar_wall_bc)
+        self.scalar = solve_implicit_diffusion_scalar(
+            self.scalar, float(dt), self.nx, self.ny, self.nz, self.dz_c, self.dz_f,
+            D, theta=self.scalar_theta, wall_bc=self.scalar_wall_bc)
+        apply_scalar_bc(self.scalar, self.scalar_wall_bc)
 
     def step_rk3(self, dt):
         """
@@ -932,6 +998,9 @@ class ChannelFlow:
                 save_flow_fields(self.u, self.v, self.w, self.p, self.z_c, self.z_f,
                                 self.Lx, self.Ly, step, self.time, u_tau_scalar, forcing_scalar,
                                 self.results_folder, 'fields.npz')
+                if self.scalar_enabled:
+                    save_scalar_field(self.scalar, self.results_folder, 'scalar.npz',
+                                      step, self.time, self.Sc)
 
                 # Save statistics state checkpoint if statistics are being collected
                 if self.turbulence_stats is not None and self.turbulence_stats.n_samples > 0:
@@ -968,3 +1037,6 @@ class ChannelFlow:
         save_flow_fields(self.u, self.v, self.w, self.p, self.z_c, self.z_f,
                         self.Lx, self.Ly, step, self.time, u_tau_final, forcing_final,
                         self.results_folder, 'fields_final.npz')
+        if self.scalar_enabled:
+            save_scalar_field(self.scalar, self.results_folder, 'scalar_final.npz',
+                              step, self.time, self.Sc)

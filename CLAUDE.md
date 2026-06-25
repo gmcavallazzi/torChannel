@@ -35,6 +35,7 @@ There is no test runner framework (no pytest). Tests are standalone scripts run 
 **Core modules**:
 - `solver.py` — Main `ChannelFlow` class: time-stepping loop, IMEX/AB2/FE schemes, adaptive dt, restart logic, bulk velocity forcing
 - `operators.py` — Spatial discretization operators (advection, diffusion) on a staggered grid. Uses `@torch.jit.script` for fused GPU kernels
+- `scalar.py` — Optional passive-scalar transport (concentration in [0,1]) at cell centres: conservative flux-form advection + IMEX diffusion (D = nu/Sc), periodic in x,y, configurable wall BC in z (`neumann` no-flux for mixing/decay studies, default; or `dirichlet`). Enabled via a `scalar:` config block; advanced each step by `ChannelFlow.advance_scalar`. Verified in `tests/test_scalar.py` (erf diffusion, mean conservation, zero numerical diffusion).
 - `projection_fft.py` — FFT-based Poisson solver for pressure projection (primary solver)
 - `projection.py` — Direct Poisson solver (fallback/testing)
 - `initflow.py` — Flow field initialization (vortices, random, parabolic, laminar, or restart from file)
