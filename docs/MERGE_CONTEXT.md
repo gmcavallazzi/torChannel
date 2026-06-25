@@ -107,9 +107,33 @@ GPU to hit the open DNS niche). Geometry: **oblique grooves first**, herringbone
     before the (weak, f_perp~1.7e-3) secondary flow can fold them. This is the proposal's
     stated central risk made concrete, and motivates Phase 3.
   - Figure: `results/figures/mixing_decay_corrugated.png` (persistent, git-ignored).
-- **Phase 3 — NEXT.** GPU production: push to HIGH Sc (where fine scales survive) +
-  resolution to keep cell-Pe controlled; possibly stronger grooves / herringbone; test
-  whether L_mix(N) then drops and follows r^{-D_f N}. This is the decisive test.
+- **Phase 3 — DONE (decisive NEGATIVE: scaling not reproduced).** GPU N-sweep at
+  higher Sc (where fine scales survive) on the GB10. Added `--Sc/--Re/--dt` overrides
+  to `scripts/run_mixing.py`. Sc diagnostic: current 32x48x48 grid is clean at Sc<=4
+  (cell-Pe~20, zero overshoot with the non-dissipative central scheme); Sc=10 wiggles
+  (cell-Pe~49, overshoot 0.20 -> would need TVD or a finer grid).
+  - L_mix(N)/L_mix(0): **Sc=1 -> 1.00/1.04/1.04; Sc=4 -> 1.00/1.14/1.15** (L_mix =
+    83.9/95.4/96.8 at Sc=4). The proposal predicts r^{-D_f N} = 0.24/0.058 (4x cut per
+    generation). We measure the OPPOSITE: the Koch fractal gives NO mixing-length benefit
+    — a slight penalty that GROWS with Sc. r^{-D_f N} is NOT reproduced.
+  - Mechanism: the oblique-groove secondary flow is STEADY and WEAK (f_perp~1e-3), not
+    CHAOTIC. Without exponential stretching the fractal's fine scales just diffuse; the
+    late-time decay is mode-limited and the extra area projects onto slow modes (mild
+    penalty). Numerics clean (overshoot 0), so this is physics. Figures:
+    `results/figures/mixing_decay_corrugated{,_Sc4}.png` (persistent, git-ignored).
+  - This is the proposal's central risk confirmed for a steady laminar secondary flow.
+
+## Recommended next (Phase 4): chaotic folding (staggered herringbone)
+
+The remaining FAIR test of the proposal is a CHAOTIC advection flow (exponential
+stretching), which is what real passive micromixers (SHM) use and what the fractal
+needs to cascade its fine scales before diffusion erases them. Add a staggered-
+herringbone groove mask (alternating oblique groove sets along x) — the immersed-
+boundary machinery already supports arbitrary h(x,y); only the mask shape changes —
+raise the groove amplitude, and rerun the N-sweep at Sc=1..4. If L_mix(N) finally
+drops there, the proposal holds in the chaotic regime but not the steady one; if it
+stays flat/worse, that is a strong negative result for the claim. This is the decisive
+strongest-case experiment.
 
 ### Other options (not being pursued now)
 - **(B) 'vortices' transient-secondary-flow demo** — cheap illustration that advection

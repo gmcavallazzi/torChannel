@@ -106,11 +106,20 @@ def main():
     ap.add_argument('--Ns', type=int, nargs='+', default=[0, 1, 2])
     ap.add_argument('--nsteps', type=int, default=1200)
     ap.add_argument('--sample_every', type=int, default=20)
+    ap.add_argument('--Sc', type=float, default=None, help='override scalar Schmidt number')
+    ap.add_argument('--Re', type=float, default=None, help='override flow Reynolds number')
+    ap.add_argument('--dt', type=float, default=None, help='override time step')
     ap.add_argument('--out', default='/tmp/torchannel_mixing')
     args = ap.parse_args()
 
     with open(args.config) as f:
         base_cfg = yaml.safe_load(f)
+    if args.Sc is not None:
+        base_cfg.setdefault('scalar', {})['Sc'] = args.Sc
+    if args.Re is not None:
+        base_cfg.setdefault('flow', {})['Re'] = args.Re
+    if args.dt is not None:
+        base_cfg.setdefault('time', {})['dt'] = args.dt
     os.makedirs(args.out, exist_ok=True)
 
     results = {}
