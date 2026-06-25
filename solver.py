@@ -12,6 +12,7 @@ from turbstats import TurbulenceStats
 from scalar import (apply_scalar_bc, advection_scalar, diffusion_xy_scalar,
                     solve_implicit_diffusion_scalar, initialize_scalar,
                     scalar_stats, save_scalar_field, load_scalar_field)
+from immersed import build_masks, penalize, fluid_cell_volume, solid_fraction
 
 # Layer-2 torch.compile (see operators.py): also fuse the remaining per-step
 # helpers — divergence, bulk velocity, and the projection correction. Opt-in via
@@ -295,6 +296,43 @@ class ChannelFlow:
                                                     top_wall_bc_type=self.top_wall_bc_type)
         else:
             raise ValueError(f"Unknown solver type: {self.solver_type}")
+
+        # ---- Immersed boundary via volume penalization (optional) --------
+        # A solid corrugation/slab is imposed inside the periodic box by an
+        # implicit Brinkman penalization force (see immersed.py). The FFT-Poisson
+        # solver is untouched: penalization is applied to the velocity before the
+        # projection step. The bulk forcing is retargeted to the FLUID volume.
+        ib_config = config.get('immersed', {})
+        self.immersed_enabled = ib_config.get('enabled', False)
+        if self.immersed_enabled:
+            self.ib_eta = float(ib_config.get('eta', 1.0e-4))
+            # Convert wave counts (per box length) to angular wavenumbers.
+            n_x = ib_config.get('n_waves_x', 1.0)
+            n_y = ib_config.get('n_waves_y', 1.0)
+            hf = dict(
+                kind=ib_config.get('kind', 'slab'),
+                z1=ib_config.get('z1', 0.2),
+                h0=ib_config.get('h0', 0.2),
+                A=ib_config.get('A', 0.1),
+                kx=2.0 * np.pi * n_x / self.Lx,
+                ky=2.0 * np.pi * n_y / self.Ly,
+            )
+            self.ib_masks = build_masks(self.nx, self.ny, self.nz,
+                                        self.Lx, self.Ly, self.Lz,
+                                        self.z_c, self.z_f,
+                                        device=self.device, **hf)
+            self.chi_u = self.ib_masks['chi_u']
+            self.chi_v = self.ib_masks['chi_v']
+            self.chi_w = self.ib_masks['chi_w']
+            self.chi_c = self.ib_masks['chi_c']
+            # Fluid-only volume weights for the bulk-forcing controller.
+            self.fluid_vol, self.fluid_volume = fluid_cell_volume(
+                self.cell_vol_ratio, self.chi_u, self.nx, self.ny, self.nz)
+            phi_s = solid_fraction(self.chi_c, self.nx, self.ny, self.nz, self.dz_f)
+            print(f"Immersed boundary enabled: kind={hf['kind']}, eta={self.ib_eta:.2e}, "
+                  f"solid fraction={phi_s:.4f}", flush=True)
+        else:
+            self.chi_u = self.chi_v = self.chi_w = self.chi_c = None
 
         # ---- Passive scalar (optional) ----------------------------------
         scalar_config = config.get('scalar', {})
@@ -585,6 +623,12 @@ class ChannelFlow:
         
         self.u[1:self.nx+1, 1:self.ny+1, 1:self.nz+1] += dt * forcing
 
+        # Immersed boundary: implicit penalization toward u=0 inside the solid.
+        if self.immersed_enabled:
+            self.u = penalize(self.u, self.chi_u, dt, self.ib_eta)
+            self.v = penalize(self.v, self.chi_v, dt, self.ib_eta)
+            self.w = penalize(self.w, self.chi_w, dt, self.ib_eta)
+
         # Update ghost cells for intermediate velocity before divergence computation
         self.apply_bc_uvw()  # Fused boundary conditions
 
@@ -699,6 +743,13 @@ class ChannelFlow:
         self.w = solve_implicit_diffusion_w(self.w, dt_t, self.nx, self.ny, self.nz,
                                             self.dz_c, self.dz_f, self.nu)
 
+        # Immersed boundary: implicit penalization toward u=0 inside the solid,
+        # applied to the intermediate velocity BEFORE projection (keeps FFT-Poisson).
+        if self.immersed_enabled:
+            self.u = penalize(self.u, self.chi_u, dt, self.ib_eta)
+            self.v = penalize(self.v, self.chi_v, dt, self.ib_eta)
+            self.w = penalize(self.w, self.chi_w, dt, self.ib_eta)
+
         # Update ghost cells for intermediate velocity before divergence computation
         self.apply_bc_uvw()  # Fused boundary conditions
 
@@ -732,8 +783,13 @@ class ChannelFlow:
         self.apply_bc_uvw()  # Fused boundary conditions
 
         # Update Bulk Forcing (Lagged, matches .susa)
-        # Calculate u_bulk using the NEW velocity (at end of step)
-        u_bulk_current = compute_bulk_velocity(self.u, self.cell_vol_ratio, self.total_volume)
+        # Calculate u_bulk using the NEW velocity (at end of step). With an
+        # immersed solid present, average over FLUID cells only (interstitial
+        # mean) so the controller is not biased by the zero-velocity solid.
+        if self.immersed_enabled:
+            u_bulk_current = compute_bulk_velocity(self.u, self.fluid_vol, self.fluid_volume)
+        else:
+            u_bulk_current = compute_bulk_velocity(self.u, self.cell_vol_ratio, self.total_volume)
         
         # Update forcing for NEXT step (PI Controller)
         # .susa uses damp=10.0 with Crank-Nicholson. We use a relaxation factor.

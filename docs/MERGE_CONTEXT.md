@@ -61,11 +61,32 @@ in x and y**. Consequences for extending the code:
   Re (1-200); a turbulent run tests the proposal's TNTI-entrainment ANALOGY, not the
   device, and needs a GPU/HPC (infeasible on a CPU-only machine).
 
-## Paused — next direction (pick one)
+## Active direction: (A) corrugated wall via volume-penalization IB
 
-- **(A) Corrugated wall via volume-penalization IB** — laminar, device-faithful
-  (Eq. 5 surface mechanism), keeps the periodic box so FFT-Poisson still works, runs
-  on modest hardware. *Recommended.*
+On a GPU+SLURM machine (NVIDIA GB10), pursuing **option (A)** with a staged Schmidt
+plan (validate the mechanism at Sc~1-10 with cell-Pe<=2, then push Sc~100-1000 on the
+GPU to hit the open DNS niche). Geometry: **oblique grooves first**, herringbone later.
+
+### Phase progress
+- **Phase 0 — DONE & VALIDATED.** Volume-penalization immersed boundary built:
+  - `immersed.py` — staggered solid-mask builders (chi_u/v/w/c), implicit pointwise
+    Brinkman penalization `u <- u/(1 + dt*chi/eta)` (no linear solve, unconditionally
+    stable), fluid-volume helpers.
+  - `solver.py` — reads an `immersed:` config block, builds masks, applies penalization
+    BEFORE projection in `step_imex`/`step_forward_euler`, and retargets the bulk-forcing
+    PI controller to the FLUID volume. `projection_fft.py` untouched (periodic box kept).
+  - `configs/penalization_slab_test.yaml` + `tests/test_immersed.py` (all pass): a flat
+    penalized slab recovers analytic Poiseuille in the reduced gap (u_max/U_bulk=1.475 vs
+    1.5; profile rel-L2 4.7%), deep-solid velocity ~0 and LINEAR in eta (O(eta) interior
+    suppression; sqrt(eta) is the interfacial slip length, not this), max|div|=0.
+- **Phase 1 — NEXT.** Oblique-groove mask h(x,y)=h0+A*sin(kx*x+ky*y); confirm nonzero
+  helical (v,w) secondary flow that grows with Re (Eq. 5 signature). Qualitative (no
+  body-fitted reference).
+- **Phase 2.** Koch scalar in the corrugated box; fluid-masked M-diagnostic; measure
+  L_mix vs N; report cell-Pe=U*dx/D each run; add TVD scalar only if wiggles appear.
+- **Phase 3.** GPU production: resolution/Sc study, L_mix(N) curve, test r^{-D_f N} scaling.
+
+### Other options (not being pursued now)
 - **(B) 'vortices' transient-secondary-flow demo** — cheap illustration that advection
   folds the interface (not sustained, not the device).
 - **(C) Turbulent case** (perturbation init at Re_tau~180 + fractal scalar IC) on

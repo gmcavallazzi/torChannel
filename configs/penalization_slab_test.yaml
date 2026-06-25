@@ -1,0 +1,42 @@
+# Phase-0 validation: a flat solid slab imposed by volume penalization should
+# recover analytic Poiseuille flow in the reduced gap [z1, Lz]. Tiny/cheap; the
+# test driver (tests/test_immersed.py) overrides eta and step count.
+grid:   {nx: 4, ny: 4, nz: 48}
+domain: {Lx: 3.1416, Ly: 3.1416, Lz: 2.0}
+
+flow:
+  Re: 10.0          # low Re -> short diffusive transient to steady Poiseuille
+  Re_tau: 5.0
+  U_bulk: 1.0
+  gamma: 0.3        # near-uniform z-grid (gamma->0 would divide by tanh(0))
+
+initialization:
+  type: "parabolic"
+  perturbation_intensity: 0.0
+
+solver: {type: "fft"}
+
+time:
+  dt: 0.005
+  n_steps: 4000
+  t_max: 100000.0
+  CFL_target: 0.25
+  dt_update_interval: 0
+  dt_max: 0.02
+  dt_min: 0.0001
+  scheme: "IMEX"
+
+compute: {device: "cpu"}
+
+output:
+  results_folder: /tmp/torchannel_penal
+  n_out: 100000
+  n_save: 100000
+
+statistics: {enabled: false, n_stats: 0}
+
+immersed:
+  enabled: true
+  kind: "slab"
+  z1: 0.5           # solid for z < 0.5 -> fluid gap [0.5, 2.0]
+  eta: 1.0e-4
