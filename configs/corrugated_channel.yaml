@@ -1,0 +1,50 @@
+# Phase-1/2: laminar channel with an OBLIQUE-GROOVE bottom wall imposed by
+# volume penalization (immersed.py). The obliquity (kx and ky both nonzero)
+# converts streamwise flow into a helical (v,w) secondary flow that folds a
+# cross-stream scalar interface — the proposal's Eq. 5 surface mechanism.
+# Phase 1 runs this without a scalar; Phase 2 turns the Koch scalar on.
+grid:   {nx: 32, ny: 48, nz: 48}
+domain: {Lx: 3.1416, Ly: 3.1416, Lz: 2.0}
+
+flow:
+  Re: 50.0
+  Re_tau: 10.0
+  U_bulk: 1.0
+  gamma: 0.4        # mild stretching; grooves sit near the bottom wall
+
+initialization:
+  type: "parabolic"
+  perturbation_intensity: 0.0
+
+solver: {type: "fft"}
+
+time:
+  dt: 0.006         # under the 2D explicit xy-diffusion limit at the lowest Re
+  n_steps: 3000
+  t_max: 100000.0
+  CFL_target: 0.25
+  dt_update_interval: 0
+  dt_max: 0.02
+  dt_min: 0.0001
+  scheme: "IMEX"
+
+compute: {device: "cuda"}
+
+output:
+  results_folder: /tmp/torchannel_corrugated
+  n_out: 100000
+  n_save: 100000
+
+statistics: {enabled: false, n_stats: 0}
+
+immersed:
+  enabled: true
+  kind: "grooves"
+  h0: 0.30          # mean groove height
+  A: 0.15           # groove amplitude -> ridges span z in [0.15, 0.45]
+  n_waves_x: 2      # streamwise wave count
+  n_waves_y: 1      # spanwise wave count (=> oblique crests)
+  eta: 1.0e-4
+
+scalar:
+  enabled: false    # Phase 1: pure flow; Phase 2 sets this true with init_type koch

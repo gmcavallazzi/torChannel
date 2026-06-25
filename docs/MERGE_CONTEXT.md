@@ -79,10 +79,21 @@ GPU to hit the open DNS niche). Geometry: **oblique grooves first**, herringbone
     penalized slab recovers analytic Poiseuille in the reduced gap (u_max/U_bulk=1.475 vs
     1.5; profile rel-L2 4.7%), deep-solid velocity ~0 and LINEAR in eta (O(eta) interior
     suppression; sqrt(eta) is the interfacial slip length, not this), max|div|=0.
-- **Phase 1 — NEXT.** Oblique-groove mask h(x,y)=h0+A*sin(kx*x+ky*y); confirm nonzero
-  helical (v,w) secondary flow that grows with Re (Eq. 5 signature). Qualitative (no
-  body-fitted reference).
-- **Phase 2.** Koch scalar in the corrugated box; fluid-masked M-diagnostic; measure
+- **Phase 1 — DONE.** Oblique-groove wall (`immersed.py` kind='grooves',
+  h=h0+A*sin(kx*x+ky*y)) drives a clear helical (v,w) secondary flow — the Eq. 5
+  folding mechanism that a flat channel lacks entirely.
+  - `configs/corrugated_channel.yaml` (grooves: h0=0.30, A=0.15, n_waves_x=2,
+    n_waves_y=1; dt=0.006 under the 2D explicit xy-diffusion limit at low Re),
+    `scripts/run_secondary_flow.py` (reports transverse KE fraction f_perp =
+    <v^2+w^2>/<u^2>, saves a (y,z) secondary-flow quiver at mid-x).
+  - Result: f_perp = 2.3e-3 / 1.7e-3 / 1.3e-3 at Re=10/50/100 (vs EXACTLY 0 for a
+    flat wall). Roughly geometric/Stokes-like fraction, slightly decreasing with Re
+    (high-Re cases also less developed at fixed t=24); the Re-dependence of MIXING
+    enters via Peclet in Phase 2, not via this KE fraction. Qualitative milestone
+    (no body-fitted reference, as the lit review flagged).
+  - GPU note: run with `PYTORCH_JIT=0` on the GB10 (JIT nvrtc can't target sm_121;
+    eager cuFFT/aten kernels work — verified). The capability UserWarning is benign.
+- **Phase 2 — NEXT.** Koch scalar in the corrugated box; fluid-masked M-diagnostic; measure
   L_mix vs N; report cell-Pe=U*dx/D each run; add TVD scalar only if wiggles appear.
 - **Phase 3.** GPU production: resolution/Sc study, L_mix(N) curve, test r^{-D_f N} scaling.
 
