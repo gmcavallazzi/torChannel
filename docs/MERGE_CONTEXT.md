@@ -273,11 +273,37 @@ now also records chi(t)=<|grad c|^2>.
   with the right observable (chi), across Sc=1->16, and with a monotone high-Sc scheme.
 - Figure: `results/figures/duct_koch_Nsweep.png` (`scripts/plot_duct_nsweep.py`).
 
-NEXT: the only remaining fair test is a CHAOTIC/stretching flow — the Phase-4 herringbone
-duct (reuse `kind='herringbone'` + `bc_y: wall`) at high Sc, or a turbulent duct. If
-L_mix(N) finally drops there, the proposal holds only in the chaotic regime; if it stays
-flat, that is the strong general negative. (Caveat for that run: use an AB2-stable dt —
-dt < dy^2/(4 nu) for momentum — the explicit AB2 in-plane diffusion is the limiter.)
+### Phase 5 DECISIVE — herringbone DUCT at high Sc: STRONG GENERAL NEGATIVE
+The remaining fair test: give the fractal an active CHAOTIC folding flow at high Sc.
+`configs/herringbone_duct.yaml` = Phase-4 staggered-herringbone floor (penalization) +
+seam-free duct (`bc_y: wall`) + TVD scalar, Sc=16, N=0/1/2, full coupled solver on GPU
+(dt=0.003, AB2-stable). Smoke: max|div|=1.5e-13, f_perp=7.2e-3 (real secondary flow,
+4x the Phase-1 oblique groove), TVD bounded. cell-Pe=52 (TVD overshoot ~4e-14; central
+would wiggle).
+- **L_mix(N)/L_mix(0) = 1.000 / 1.005 / 1.001 — FLAT** (vs proposal 0.25/0.062). No
+  fractal benefit even WITH chaotic folding at high Sc.
+- The flow IS stirring: N=0 L_mix~49 vs the plain duct's diffusive ~130 (M=0.2) — the
+  herringbone rolls roughly halve the mixing length. But they help every N EQUALLY.
+- chi(N)/chi(0) = 1.00/1.29/1.31 — the fractal area is present and resolved; it just
+  doesn't shorten L_mix.
+- Why: the steady herringbone rolls (f_perp~7e-3) stir the GROSS interface but are not
+  strongly chaotic (no fast exponential stretching), so the fractal's fine scales diffuse
+  before the weak folding can cascade them. Figure: `results/figures/all_regimes_Nsweep.png`.
+- Caveat (common-mode, doesn't affect the ratio): the scalar leaks into the immersed
+  solid by diffusion (no no-flux at the immersed surface, only at domain walls) — same as
+  all prior immersed runs; fluid-mean drifts ~1-2% over a run, identical across N.
+
+## OVERALL CONCLUSION (torChannel, all accessible laminar regimes)
+L_mix(N)/L_mix(0) is FLAT (~1.0, never the proposed r^{-Df N}) across: plain duct Sc=1
+and Sc=16 (0.98, Sc-independent to 5 sig figs) AND herringbone duct Sc=16 (1.00). The
+area-sensitive chi DOES see the fractal everywhere (1.2-1.3x) — the null is physical, not
+a resolution/observable artifact. **Eq. 4 (the proposal's only sharp falsifiable claim)
+is refuted in every laminar regime reachable here**, including its intended high-Sc regime
+and with an active chaotic-advection flow. The proposal would need a STRONGLY chaotic flow
+(fast exponential stretching) — a turbulent duct, or much stronger/aperiodic stirring than
+a steady herringbone — for the fractal's fine scales to cascade before diffusing. That, and
+the headline unchanged-pressure-drop (Falk-Commenge) claim, remain the only untested doors,
+and both need machinery beyond the present periodic-box temporal framing.
 
 ---
 
