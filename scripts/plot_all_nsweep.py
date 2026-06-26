@@ -6,7 +6,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-usetex = os.environ.get("TORCHANNEL_USETEX", "0") == "1"
+usetex = os.environ.get("TORCHANNEL_USETEX", "1") == "1"
 plt.rcParams.update({"text.usetex": usetex, "font.family": "serif",
                      "axes.labelsize": 12, "axes.titlesize": 12, "legend.fontsize": 9})
 
@@ -40,7 +40,7 @@ for lab, rr, mk, col in series:
 ax.set_yscale('log'); ax.set_xticks(Ns)
 ax.set_xlabel(r"Koch generation $N$")
 ax.set_ylabel(r"$L_{\mathrm{mix}}(N)/L_{\mathrm{mix}}(0)$")
-ax.set_title(r"Mixing length: measured (flat) vs proposed scaling")
+ax.set_title(r"Mixing length vs prediction")
 ax.legend(loc='lower left'); ax.grid(True, which='both', alpha=0.3)
 ax.set_ylim(0.04, 1.5)
 os.makedirs("results/figures", exist_ok=True)

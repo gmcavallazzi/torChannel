@@ -321,11 +321,15 @@ and Sc=16 (0.98, Sc-independent to 5 sig figs) AND herringbone duct Sc=16 (1.00)
 area-sensitive chi DOES see the fractal everywhere (1.2-1.3x) — the null is physical, not
 a resolution/observable artifact. **Eq. 4 (the proposal's only sharp falsifiable claim)
 is refuted in every laminar regime reachable here**, including its intended high-Sc regime
-and with an active chaotic-advection flow. The proposal would need a STRONGLY chaotic flow
-(fast exponential stretching) — a turbulent duct, or much stronger/aperiodic stirring than
-a steady herringbone — for the fractal's fine scales to cascade before diffusing. That, and
-the headline unchanged-pressure-drop (Falk-Commenge) claim, remain the only untested doors,
-and both need machinery beyond the present periodic-box temporal framing.
+and with an active secondary flow. The one device-relevant door left open: a STRONG LAMINAR
+CHAOTIC-ADVECTION flow (deterministic exponential stretching — a vigorous staggered
+herringbone mixer, NOT turbulence) at microfluidic Re and high Sc; my herringbone was too
+weak (~2.6x speedup vs the ~log(Pe) of a real SHM). NB chaotic advection != turbulence:
+the device is laminar (Re 1-200) and needs deterministic folding, not high-Re eddies. A
+turbulent run would only test the proposal's TNTI-entrainment ANALOGY (its conceptual
+ancestor, Sec 2.4), not the microfluidic device — separate, academic question. The other
+untested door is the headline unchanged-pressure-drop (Falk-Commenge) claim. Both need
+machinery beyond the present periodic-box temporal framing.
 
 ---
 

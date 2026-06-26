@@ -6,7 +6,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-usetex = os.environ.get("TORCHANNEL_USETEX", "0") == "1"
+usetex = os.environ.get("TORCHANNEL_USETEX", "1") == "1"
 plt.rcParams.update({"text.usetex": usetex, "font.family": "serif",
                      "axes.labelsize": 12, "axes.titlesize": 12, "legend.fontsize": 9})
 
@@ -38,14 +38,14 @@ ax.plot(Ns, ratio16, '^-', color="#d62728", lw=1.8, ms=7, label=r"measured Sc=16
 ax.set_yscale('log'); ax.set_xticks(Ns)
 ax.set_xlabel(r"Koch generation $N$")
 ax.set_ylabel(r"$L_{\mathrm{mix}}(N)/L_{\mathrm{mix}}(0)$")
-ax.set_title("mixing length vs prediction")
+ax.set_title(r"Mixing length")
 ax.legend(); ax.grid(True, which='both', alpha=0.3)
 
 for N in Ns:
     ax2.semilogy(s16[N]['t'], s16[N]['M'], 'o-', ms=2.5, lw=1.5, label=rf"$N={N}$")
 ax2.axhline(0.05, ls=':', color='k', lw=1)
 ax2.set_xlabel(r"time $t$"); ax2.set_ylabel(r"segregation $M(t)$")
-ax2.set_title("Sc=16: M(t) collapses across N")
+ax2.set_title(r"$M(t)$ collapse (Sc$=16$)")
 ax2.legend(); ax2.grid(True, which='both', alpha=0.3)
 
 os.makedirs("results/figures", exist_ok=True)
