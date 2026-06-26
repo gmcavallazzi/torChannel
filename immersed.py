@@ -159,6 +159,41 @@ def build_masks(nx, ny, nz, Lx, Ly, Lz, z_c, z_f, device='cpu', **hf):
             Y, Z = torch.meshgrid(yv, zv, indexing='ij')        # (Ny, Nz)
             solid = ((Y - cy) ** 2 + (Z - cz) ** 2) > R ** 2    # (Ny, Nz)
             return solid.to(torch.float64).unsqueeze(0).expand(len(xv), -1, -1).clone()
+    elif hf.get('kind', 'slab') == 'pipe_koch':
+        # Circular cross-section whose WALL carries a generation-N, area-balanced Koch
+        # corrugation in the AZIMUTHAL direction -- the faithful "fractal inlet surface"
+        # on a round orifice (no obstacles; the wall itself is folded). The corrugation
+        # is localised at the INLET via a streamwise envelope env(x): full at x=0,
+        # smoothly to zero by x = inlet_len; downstream the pipe is the smooth disc.
+        #   R_wall(theta, x) = R + amp * env(x) * d_hat(theta)
+        # d_hat is the Koch zigzag wrapped n_lobes times around the circle, normalised
+        # to unit peak so the radial amplitude (= koch_amp*R) is the SAME for every N
+        # (constant envelope, more scales with N) and zero-mean in theta (area-balanced
+        # to first order). N=0 -> d_hat=0 -> smooth inscribed disc (the baseline).
+        R = float(hf.get('pipe_R', 0.5 * min(Ly, Lz)))
+        cy = float(hf.get('pipe_yc', 0.5 * Ly))
+        cz = float(hf.get('pipe_zc', 0.5 * Lz))
+        N = int(hf.get('N', 0)); r = float(hf.get('r', 3.0))
+        amp = float(hf.get('koch_amp', 0.1)) * R
+        n_lobes = int(hf.get('n_lobes', 1))
+        inlet_len = float(hf.get('inlet_len', 0.1 * Lx))
+
+        def mask(xv, yv, zv):
+            Y, Z = torch.meshgrid(yv, zv, indexing='ij')        # (Ny, Nz)
+            dY, dZ = Y - cy, Z - cz
+            rho = torch.sqrt(dY ** 2 + dZ ** 2)                 # (Ny, Nz)
+            theta = torch.atan2(dZ, dY)                         # (-pi, pi]
+            tn = ((theta + np.pi) / (2.0 * np.pi) * n_lobes) % 1.0
+            d = _koch_zigzag_disp(N, r, tn.detach().cpu().numpy().ravel()).reshape(tn.shape)
+            m = float(np.max(np.abs(d)))
+            d_hat = torch.as_tensor(d / m if m > 0 else d, device=xv.device, dtype=torch.float64)
+            # streamwise inlet envelope: half-cosine bump, 1 at x=0 -> 0 at inlet_len
+            env = torch.where(xv < inlet_len,
+                              0.5 * (1.0 + torch.cos(np.pi * xv.clamp(max=inlet_len) / max(inlet_len, 1e-12))),
+                              torch.zeros_like(xv))              # (Nx,)
+            Rwall = R + amp * env.view(-1, 1, 1) * d_hat.unsqueeze(0)   # (Nx, Ny, Nz)
+            solid = rho.unsqueeze(0) > Rwall                    # (Nx, Ny, Nz)
+            return solid.to(torch.float64)
     else:
         def mask(xv, yv, zv):
             # h on the (x, y) plane of this location, then compare to z (broadcast).

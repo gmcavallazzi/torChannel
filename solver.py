@@ -346,6 +346,9 @@ class ChannelFlow:
                 pipe_R=ib_config.get('pipe_R', 0.5 * min(self.Ly, self.Lz)),
                 pipe_yc=ib_config.get('pipe_yc', 0.5 * self.Ly),
                 pipe_zc=ib_config.get('pipe_zc', 0.5 * self.Lz),
+                # pipe_koch (fractal inlet surface on the round orifice)
+                n_lobes=ib_config.get('n_lobes', 1),
+                inlet_len=ib_config.get('inlet_len', 0.1 * self.Lx),
             )
             self.ib_masks = build_masks(self.nx, self.ny, self.nz,
                                         self.Lx, self.Ly, self.Lz,

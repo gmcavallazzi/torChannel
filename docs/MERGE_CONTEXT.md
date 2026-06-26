@@ -364,6 +364,36 @@ inlet-only fractal is novel, but chaotic-mixing theory (t_mix~log(Pe)/lambda, st
 not power-law, benefit — i.e. r^{-Df N} is inconsistent with standard mixing physics, which
 our DNS confirms.
 
+## Phase 5 — FAITHFUL test: developing duct (inflow/outflow) + fractal WALL surface
+
+The earlier negatives were temporal periodic boxes with the fractal only in the scalar
+IC. Phase 5 closes both gaps the proposal could complain about:
+
+1. **Real developing flow.** Added inflow/outflow streamwise BCs (`domain.bc_x: inout`,
+   `bc_y: wall`): prescribed inlet profile, convective/mass-corrected outflow, all-Neumann
+   Poisson with a gauge pin. Validated against literature — square duct u_max/u_bulk=2.096
+   (0.4%), circular pipe (volume-penalization immersed disc) u_max/u_bulk=1.983 vs
+   Hagen-Poiseuille 2.000 (0.8%). Fluid divergence ~1e-12 throughout.
+2. **The actual fractal SURFACE, not a proxy.** New immersed kind `pipe_koch`: a circular
+   orifice whose WALL is azimuthally Koch-corrugated (generation N, area-balanced, unit-peak
+   normalised so the envelope amplitude is N-independent — "more scales, same envelope"),
+   localised at the INLET by a streamwise half-cosine envelope; downstream the pipe is the
+   smooth disc. NO obstacles — the wall itself is folded, exactly as the proposal's Fig. 1.
+   Combined with the Koch BAFFLE (scalar interface, gen N). Both scale together with N.
+
+**Run** (`scripts/run_pipe_koch_mixing.py`, Re=40, Sc=0.5, round duct Lx=10, R=0.42,
+corrugation 13% of R, inlet_len=1.0, N=0,1,2; fluid div verified 1.15e-12, the larger
+all-cell div=0.17 is solid-confined Brinkman slip and does NOT touch the fluid):
+
+  The streamwise segregation M(x) curves for N=0, 1, 2 **collapse onto a single line**
+  (mixing length identical to within line width; M→0.5 at x≈0.7 and M→0 by x≈4 for all N).
+  L_mix(N)/L_mix(0) ≈ 1, NOT the predicted r^{-Df N} ≈ 0.25, 0.06.
+  Figure: results/figures/pipe_koch_mixing.png.
+
+This is the most faithful realisation achievable here — the real device geometry (round
+orifice, folded wall at the junction, developing flow) — and it reproduces the same NULL.
+The fractal inlet surface confers no mixing-length benefit.
+
 ## OVERALL CONCLUSION (torChannel, all accessible laminar regimes)
 L_mix(N)/L_mix(0) is FLAT (~1.0, never the proposed r^{-Df N}) across: plain duct Sc=1/16/100
 (0.98, Sc-independent to 5 sig figs), weak herringbone duct (1.00), AND a STRONG laminar
