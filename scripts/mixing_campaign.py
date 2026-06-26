@@ -1,13 +1,17 @@
 """Sc-campaign driver: fractal-mixing N-sweep at fixed dt with convergence early-stop.
 
 Two modes:
-  baffle          : temporal periodic box, smooth square duct, Koch BAFFLE interface IC
-                    (the proposal's diffusive-limit test; no wall surface). x-homogeneous,
-                    so a thin streamwise box suffices. Mixing measured as global M(t),
-                    with t == downstream distance x = U*t. Early-stop when fully mixed.
-  surface_baffle  : developing duct (inflow/outflow), circular fractal WALL surface at the
-                    inlet + Koch baffle. Mixing measured as the steady M(x) profile.
-                    Early-stop when the field reaches steady state.
+  baffle          : SHORT developing duct (inflow/outflow), SMOOTH circular wall + Koch
+                    BAFFLE interface prescribed at the inlet (no wall surface). Mixing is
+                    the steady M(x) profile; the time-march to steady state is the only
+                    transient. Early-stop at steady state.
+  surface_baffle  : same short developing duct but with the circular fractal WALL surface
+                    at the inlet (in addition to the Koch baffle). Differs from `baffle`
+                    ONLY by the wall fractal -> clean controlled comparison. Steady M(x),
+                    early-stop at steady state.
+
+Both are developing ducts (steady M(x)); the only physical transient is the laminar
+fill-in to steady state, which the drift-based early-stop detects.
 
 Design choices requested:
   * FIXED dt (time.dt_update_interval = 0) for performance and reproducibility.
@@ -30,43 +34,35 @@ from utils import compute_divergence
 
 
 def base_config(mode, Sc, dt):
+    # Short developing duct, circular cross-section. The N-dependence lives near the inlet
+    # (Koch folds + the surface's secondary flow), so Lx=6 resolves that region rather than
+    # the long diffusive tail. `baffle` uses a SMOOTH circular wall (kind='pipe'); the wall
+    # fractal is added only in `surface_baffle` (kind='pipe_koch') -> the two differ ONLY by
+    # the wall, with the same R=0.42 available cross-section.
     if mode == 'baffle':
-        return dict(
-            grid={'nx': 16, 'ny': 128, 'nz': 128},
-            domain={'Lx': 2.0, 'Ly': 1.0, 'Lz': 1.0, 'bc_y': 'wall', 'bc_x': 'periodic'},
-            flow={'Re': 40.0, 'Re_tau': 10.0, 'U_bulk': 1.0, 'gamma': 1.0},
-            boundary_conditions={'top_wall': {'type': 'dirichlet'}},
-            initialization={'type': 'parabolic', 'perturbation_intensity': 0.0},
-            solver={'type': 'fft'},
-            time={'dt': dt, 'n_steps': 1, 't_max': 1e9, 'CFL_target': 0.25,
-                  'dt_update_interval': 0, 'dt_max': dt, 'dt_min': dt, 'scheme': 'IMEX'},
-            compute={'device': 'cuda' if torch.cuda.is_available() else 'cpu'},
-            output={'results_folder': '/tmp/torchannel_campaign', 'n_out': 10**9, 'n_save': 10**9},
-            statistics={'enabled': False, 'n_stats': 0},
-            scalar={'enabled': True, 'Sc': Sc, 'wall_bc': 'neumann', 'scheme': 'tvd',
-                    'init_type': 'koch', 'N': 0, 'r': 3.0, 'eps_cells': 1.0, 'theta': 0.5})
-    if mode == 'surface_baffle':
-        # Short developing duct: the N-dependence lives near the inlet (Koch folds +
-        # the surface's secondary flow), so we resolve that region well rather than the
-        # long diffusive tail. Lx=6 captures the inlet + early M(x) decay where N differs.
-        return dict(
-            grid={'nx': 64, 'ny': 96, 'nz': 96},
-            domain={'Lx': 6.0, 'Ly': 1.0, 'Lz': 1.0, 'bc_y': 'wall', 'bc_x': 'inout'},
-            flow={'Re': 40.0, 'Re_tau': 10.0, 'U_bulk': 1.0, 'gamma': 1.0},
-            boundary_conditions={'top_wall': {'type': 'dirichlet'}},
-            initialization={'type': 'parabolic', 'perturbation_intensity': 0.0},
-            solver={'type': 'fft'},
-            time={'dt': dt, 'n_steps': 1, 't_max': 1e9, 'CFL_target': 0.25,
-                  'dt_update_interval': 0, 'dt_max': dt, 'dt_min': dt, 'scheme': 'IMEX'},
-            compute={'device': 'cuda' if torch.cuda.is_available() else 'cpu'},
-            output={'results_folder': '/tmp/torchannel_campaign', 'n_out': 10**9, 'n_save': 10**9},
-            statistics={'enabled': False, 'n_stats': 0},
-            immersed={'enabled': True, 'kind': 'pipe_koch', 'eta': 1.0e-4,
-                      'pipe_R': 0.42, 'pipe_yc': 0.5, 'pipe_zc': 0.5,
-                      'N': 0, 'r': 3.0, 'koch_amp': 0.15, 'n_lobes': 6, 'inlet_len': 1.0},
-            scalar={'enabled': True, 'Sc': Sc, 'wall_bc': 'neumann', 'scheme': 'tvd',
-                    'init_type': 'koch', 'N': 0, 'r': 3.0, 'eps_cells': 1.0, 'theta': 0.5})
-    raise ValueError(mode)
+        immersed = {'enabled': True, 'kind': 'pipe', 'eta': 1.0e-4,
+                    'pipe_R': 0.42, 'pipe_yc': 0.5, 'pipe_zc': 0.5}
+    elif mode == 'surface_baffle':
+        immersed = {'enabled': True, 'kind': 'pipe_koch', 'eta': 1.0e-4,
+                    'pipe_R': 0.42, 'pipe_yc': 0.5, 'pipe_zc': 0.5,
+                    'N': 0, 'r': 3.0, 'koch_amp': 0.15, 'n_lobes': 6, 'inlet_len': 1.0}
+    else:
+        raise ValueError(mode)
+    return dict(
+        grid={'nx': 64, 'ny': 96, 'nz': 96},
+        domain={'Lx': 6.0, 'Ly': 1.0, 'Lz': 1.0, 'bc_y': 'wall', 'bc_x': 'inout'},
+        flow={'Re': 40.0, 'Re_tau': 10.0, 'U_bulk': 1.0, 'gamma': 1.0},
+        boundary_conditions={'top_wall': {'type': 'dirichlet'}},
+        initialization={'type': 'parabolic', 'perturbation_intensity': 0.0},
+        solver={'type': 'fft'},
+        time={'dt': dt, 'n_steps': 1, 't_max': 1e9, 'CFL_target': 0.25,
+              'dt_update_interval': 0, 'dt_max': dt, 'dt_min': dt, 'scheme': 'IMEX'},
+        compute={'device': 'cuda' if torch.cuda.is_available() else 'cpu'},
+        output={'results_folder': '/tmp/torchannel_campaign', 'n_out': 10**9, 'n_save': 10**9},
+        statistics={'enabled': False, 'n_stats': 0},
+        immersed=immersed,
+        scalar={'enabled': True, 'Sc': Sc, 'wall_bc': 'neumann', 'scheme': 'tvd',
+                'init_type': 'koch', 'N': 0, 'r': 3.0, 'eps_cells': 1.0, 'theta': 0.5})
 
 
 def Mx_profile(sim):
@@ -112,12 +108,9 @@ def run_case(mode, Sc, N, dt, max_steps, check=500, snap=4000, M_stop=0.02,
 
     def take_snapshot(stp, M):
         s = {'t': stp * dt, 'step': stp, 'M': M}
-        if mode == 'surface_baffle':
-            s['Mx'] = Mx_profile(sim)
-            s['c_xy'] = sim.scalar[1:nx+1, 1:ny+1, nz // 2].detach().cpu().numpy()    # mid-z (x,y)
-            s['c_yz_in'] = sim.scalar[max(1, nx // 12), 1:ny+1, 1:nz+1].detach().cpu().numpy()  # near inlet
-        else:
-            s['c_yz'] = sim.scalar[nx // 2, 1:ny+1, 1:nz+1].detach().cpu().numpy()    # cross-section
+        s['Mx'] = Mx_profile(sim)
+        s['c_xy'] = sim.scalar[1:nx+1, 1:ny+1, nz // 2].detach().cpu().numpy()        # mid-z (x,y)
+        s['c_yz_in'] = sim.scalar[max(1, nx // 12), 1:ny+1, 1:nz+1].detach().cpu().numpy()  # near inlet
         snaps.append(s)
         np.savez(snap_path, snaps=np.array(snaps, dtype=object), Lx=Lx, dt=dt, mode=mode, N=N, Sc=Sc)
 
@@ -161,10 +154,9 @@ def run_case(mode, Sc, N, dt, max_steps, check=500, snap=4000, M_stop=0.02,
     final = dict(mode=mode, Sc=Sc, N=N, dt=dt, status=status, steps=step, Lx=Lx,
                  scalar=sim.scalar[1:nx+1, 1:ny+1, 1:nz+1].detach().cpu().numpy().astype(np.float32),
                  u=sim.u[1:nx+1, 1:ny+1, 1:nz+1].detach().cpu().numpy().astype(np.float32))
-    if mode == 'surface_baffle':
-        final['Mx'] = Mx_profile(sim)
-        final['x'] = np.linspace(0, Lx, len(final['Mx']))
-        final['chi_c'] = sim.chi_c[1:nx+1, 1:ny+1, 1:nz+1].detach().cpu().numpy().astype(np.float32)
+    final['Mx'] = Mx_profile(sim)
+    final['x'] = np.linspace(0, Lx, len(final['Mx']))
+    final['chi_c'] = sim.chi_c[1:nx+1, 1:ny+1, 1:nz+1].detach().cpu().numpy().astype(np.float32)
     np.savez(final_path, **final)
     print(f"  [N={N}] DONE status={status} steps={step}  -> {tag}_{{history,snaps,final}}.npz", flush=True)
     return final

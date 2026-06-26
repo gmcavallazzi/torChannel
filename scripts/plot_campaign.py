@@ -44,10 +44,10 @@ def main():
         tag = f"{a.mode}_Sc{int(a.Sc)}_N{N}"
         hp = os.path.join(a.indir, f"{tag}_history.npz")
         fp = os.path.join(a.indir, f"{tag}_final.npz")
-        if a.mode == 'surface_baffle' and os.path.exists(fp):
-            d = np.load(fp); xv, Mv = d['x'], d['Mx']; xlab = r"$x$"
+        if os.path.exists(fp):
+            d = np.load(fp); xv, Mv = d['x'], d['Mx']; xlab = r"$x$"      # steady M(x)
         elif os.path.exists(hp):
-            d = np.load(hp); xv, Mv = d['t'], d['M']; xlab = r"$x=U t$"
+            d = np.load(hp); xv, Mv = d['t'], d['M']; xlab = r"$t$"        # partial: M(t) so far
         else:
             continue
         axs[0].plot(xv, Mv, lw=1.6, label=r"$N=%d$" % N)

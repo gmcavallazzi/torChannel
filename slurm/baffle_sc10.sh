@@ -16,9 +16,10 @@ PY=/home/giorgio/.conda/envs/cans_drl/bin/python
 echo "host=$(hostname)  CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES  $(date)"
 $PY -c "import torch; print('torch', torch.__version__, 'cuda', torch.cuda.is_available())"
 
-# Baffle-only (temporal box, smooth square duct, Koch baffle IC): the diffusive-limit
-# test of Eq. 4. Fixed dt=4e-4 (verified div ~1e-13). Early-stop at M<0.05.
-$PY scripts/mixing_campaign.py --mode baffle --Sc 10 --dt 4e-4 \
-    --Ns 0 1 2 3 4 --check 1000 --snap 20000 --M_stop 0.05 \
-    --min_steps 5000 --max_steps 500000 --outdir results/campaign
+# Baffle-only (short developing duct, SMOOTH circular wall + Koch baffle inlet interface):
+# the steady M(x) profile carries the near-inlet N-dependence. Fixed dt=5e-4.
+# Early-stop on STEADY STATE (drift<2e-5).
+$PY scripts/mixing_campaign.py --mode baffle --Sc 10 --dt 5e-4 \
+    --Ns 0 1 2 3 4 --check 500 --snap 4000 --drift_tol 2e-5 \
+    --min_steps 4000 --max_steps 120000 --outdir results/campaign
 echo "done $(date)"
