@@ -81,7 +81,7 @@ def Mx_profile(sim):
 
 
 def run_case(mode, Sc, N, dt, max_steps, check=500, snap=4000, M_stop=0.02,
-             drift_tol=2e-5, min_steps=2000, outdir='results/campaign'):
+             drift_tol=2e-5, min_steps=2000, outdir='results/campaign', warm=None):
     cfg = base_config(mode, Sc, dt)
     cfg['scalar']['N'] = N
     if mode == 'surface_baffle':
@@ -91,6 +91,21 @@ def run_case(mode, Sc, N, dt, max_steps, check=500, snap=4000, M_stop=0.02,
     sim = ChannelFlow(f.name)
     nx, ny, nz = sim.nx, sim.ny, sim.nz
     chi = sim.chi_c if sim.immersed_enabled else None
+
+    # WARM START: seed velocity + scalar from a previous converged case (same grid). The
+    # steady state is unique, so this only shortens the path to it -- the new inlet/wall BCs
+    # for THIS N are re-imposed below, and the drift early-stop still verifies steadiness.
+    # For the baffle the wall (hence flow) is identical across N, so the flow starts already
+    # developed; only the near-inlet scalar fold has to re-adjust.
+    if warm is not None:
+        with torch.no_grad():
+            sim.u.copy_(warm['u']); sim.v.copy_(warm['v']); sim.w.copy_(warm['w'])
+            sim.scalar.copy_(warm['scalar'])
+        sim.apply_bc_uvw()
+        sim._apply_scalar_bc()
+        sim.rhs_u_prev = sim.rhs_v_prev = sim.rhs_w_prev = None   # drop stale AB2 history
+        sim.rhs_c_prev = None
+        print(f"  [N={N}] warm-started from previous converged case", flush=True)
     os.makedirs(outdir, exist_ok=True)
     tag = f"{mode}_Sc{int(Sc)}_N{N}"
     hist_path = os.path.join(outdir, f"{tag}_history.npz")
@@ -159,7 +174,9 @@ def run_case(mode, Sc, N, dt, max_steps, check=500, snap=4000, M_stop=0.02,
     final['chi_c'] = sim.chi_c[1:nx+1, 1:ny+1, 1:nz+1].detach().cpu().numpy().astype(np.float32)
     np.savez(final_path, **final)
     print(f"  [N={N}] DONE status={status} steps={step}  -> {tag}_{{history,snaps,final}}.npz", flush=True)
-    return final
+    # full ghosted state (same grid across N) -> warm start for the next case
+    state = {k: getattr(sim, k).detach().clone() for k in ('u', 'v', 'w', 'scalar')}
+    return final, state
 
 
 if __name__ == "__main__":
@@ -177,7 +194,9 @@ if __name__ == "__main__":
     ap.add_argument('--outdir', default='results/campaign')
     a = ap.parse_args()
     print(f"=== campaign mode={a.mode} Sc={a.Sc} dt={a.dt} Ns={a.Ns} ===", flush=True)
+    warm = None
     for N in a.Ns:
-        run_case(a.mode, a.Sc, N, a.dt, a.max_steps, check=a.check, snap=a.snap,
-                 M_stop=a.M_stop, drift_tol=a.drift_tol, min_steps=a.min_steps, outdir=a.outdir)
+        _, warm = run_case(a.mode, a.Sc, N, a.dt, a.max_steps, check=a.check, snap=a.snap,
+                           M_stop=a.M_stop, drift_tol=a.drift_tol, min_steps=a.min_steps,
+                           outdir=a.outdir, warm=warm)
     print("=== campaign complete ===", flush=True)

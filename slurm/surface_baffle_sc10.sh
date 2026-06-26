@@ -21,5 +21,5 @@ $PY -c "import torch; print('torch', torch.__version__, 'cuda', torch.cuda.is_av
 # the steady M(x) profile carries the near-inlet N-dependence.
 $PY scripts/mixing_campaign.py --mode surface_baffle --Sc 10 --dt 5e-4 \
     --Ns 0 1 2 3 4 --check 500 --snap 4000 --drift_tol 2e-5 \
-    --min_steps 4000 --max_steps 120000 --outdir results/campaign
+    --min_steps 12000 --max_steps 120000 --outdir results/campaign
 echo "done $(date)"
