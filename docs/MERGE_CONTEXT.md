@@ -293,6 +293,28 @@ would wiggle).
   solid by diffusion (no no-flux at the immersed surface, only at domain walls) — same as
   all prior immersed runs; fluid-mean drifts ~1-2% over a run, identical across N.
 
+### Robustness checks (asked "to be 100% sure")
+- **No hidden early-time benefit (threshold-resolved).** Resolving t_mix at M=0.9..0.05:
+  the fractal DOES accelerate the FIRST stage (plain duct Sc=16, L_mix(N2)/L(0): M=0.9 ->
+  0.51, M=0.7 -> 0.81, M=0.5 -> 0.91, ... M=0.05 -> 0.98), but the benefit decays
+  monotonically and never reaches r^{-Df N}=0.06 at ANY threshold. Initial M is
+  near-identical across N (0.984/0.979/0.973) => the fractal folds carry ~no extra
+  VARIANCE (variance set by the gross 0->1 split), so the enhanced flux drains a
+  negligible reservoir. "Max early lead" M0-M_N peaks at only +0.03..0.046 (t~3-17) then
+  is erased. So the null is not an artifact of measuring at homogenisation: the early
+  effect is real, small, and gone before M~0.3.
+- **BC sensitivity.** The RATIO is BC-robust (<4% across periodic channel, plain duct
+  Sc=1/16/100, herringbone duct) because L_mix(N)/L(0) is set by the gravest decay mode,
+  which is the SAME domain-scale (N-independent) mode for all N. BCs shift ABSOLUTE L_mix
+  (and the gravest eigenvalue, Neumann vs Dirichlet ~4x) but not the ratio.
+- **Sc reach.** Proposal regime is Sc~1000 (D~1e-9, water; Pe up to ~1e4). Measured ratio
+  is identical at Sc=1, 16, 100 (0.982/0.981 to 3-4 sig figs; t_mix ∝ Sc exactly),
+  confirming the analytic Sc-independence of the diffusive limit over a 100x span. My
+  Sc=16 flow-Pe is already ~800 (in the proposal's range). UNTESTED door: high Sc combined
+  with STRONG chaotic stretching (Batchelor) — my herringbone is weak (only ~2.6x mixing
+  speedup vs the log(Pe)~100x of a true SHM), so a vigorously chaotic flow at high Sc is
+  the one case not closed.
+
 ## OVERALL CONCLUSION (torChannel, all accessible laminar regimes)
 L_mix(N)/L_mix(0) is FLAT (~1.0, never the proposed r^{-Df N}) across: plain duct Sc=1
 and Sc=16 (0.98, Sc-independent to 5 sig figs) AND herringbone duct Sc=16 (1.00). The
