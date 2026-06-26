@@ -84,6 +84,33 @@ NO immersed boundary (patterned wall would need penalization ported to Fortran).
 NEXT in CaNS: N-sweep comparing chi(t) & M(t) across N=0/1/2; then high Sc; folding needs a
 turbulent duct or a ported penalization wall.
 
+### CaNS N-sweep — DONE (seam-free duct, Sc=1): confirms the audit's two-part story
+Driver `run_merge/run_sweep.sh` (loops N=0/1/2: regen `scalar_ic.bin` via
+`utils/gen_koch_ic.py --N`, truncate `data/mixing_s_001.out` — CaNS opens it in APPEND
+mode, so it MUST be removed between runs — run `./cans`, archive `sweep_out/mixing_N{N}.out`).
+Grid 32x64x64, duct Lx,Ly,Lz=2,1,1, Poiseuille init, nu=alpha=0.01 (Sc=1), 10000 steps to
+t~31.9. Runs are independent (restart=F, fresh IC each); ~70 s for all three on the GB10.
+- **chi (scalar dissipation) IS N-sensitive early — as predicted.** chi(t=0.064) ratio =
+  **1.00 / 1.24 / 1.27** (N0/N1/N2): the extra fractal interface really does raise the
+  dissipation rate. But the enhancement EVAPORATES fast: curves collapse by t~1, and by t~2
+  N>0 is marginally BELOW N0. Fine scales (N=2 striations ~0.13 wide) diffuse in t~w^2/D~1-2
+  t.u. — a few % of t_mix.
+- **Mixing length is N-insensitive — NOT the proposal's scaling.** L_mix(N)/L_mix(0) (M=0.05)
+  = **1.00 / 0.98 / 0.98** (t_mix = 29.3/28.8/28.7). Same at every threshold (M=0.5/0.2/0.1).
+  Proposal predicts r^{-Df N} = 1.00/0.25/0.06 (4x cut per generation). We measure ~2%,
+  essentially flat.
+- **Why:** a straight laminar duct has NO secondary/transverse flow (duct secondary flow is a
+  turbulent effect) — pure cross-stream diffusion + streamwise advection. Without folding the
+  fractal's fine scales just diffuse before they matter; global M is set by the gravest
+  diffusive mode (tau~(Lz/pi)^2/D~10), which is N-blind. This is the SAME negative as
+  torChannel but now in a seam-free geometry AND with the right observable shown explicitly:
+  the area-sensitive chi sees the fractal; the mixing length does not, because there is no
+  stretching to keep the fine scales alive.
+- Figure: `results/figures/cans_duct_koch_Nsweep_Sc1.png` (M(t) collapse + chi(t) early split).
+- Confirms: the proposal needs a CHAOTIC/stretching flow, not just a seam-free duct. NEXT
+  remains high-Sc (TVD scalar) and/or a folding flow (turbulent duct, or penalization wall
+  ported to CaNS Fortran).
+
 torChannel additions kept for the record: seam-free `koch_strip` IC + `scalar_dissipation`
 in scalar.py (the cheap reframe, now superseded by the CaNS duct).
 
