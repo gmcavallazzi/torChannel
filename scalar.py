@@ -302,6 +302,22 @@ def _signed_distance(points: np.ndarray, polyline: np.ndarray,
     return out
 
 
+def _point_in_polygon(points: np.ndarray, polygon: np.ndarray) -> np.ndarray:
+    """Vectorised even-odd ray-casting test; True for points inside the closed polygon.
+
+    Robust regardless of fold density (winding is well-defined for a CLOSED loop),
+    unlike a nearest-segment side test on an OPEN polyline, whose sign is ambiguous
+    near the curve's endpoints and flips at high generation N."""
+    px, py = points[:, 0], points[:, 1]
+    vx0, vy0 = polygon[:-1, 0], polygon[:-1, 1]
+    vx1, vy1 = polygon[1:, 0], polygon[1:, 1]
+    straddle = (vy0[None, :] > py[:, None]) != (vy1[None, :] > py[:, None])
+    denom = np.where((vy1 - vy0) == 0.0, 1.0, vy1 - vy0)
+    xint = (vx1 - vx0)[None, :] * (py[:, None] - vy0[None, :]) / denom[None, :] + vx0[None, :]
+    crossings = (straddle & (px[:, None] < xint)).sum(axis=1)
+    return (crossings % 2) == 1
+
+
 def koch_interface_yz(y_c: np.ndarray, z_c: np.ndarray, Ly: float, Lz: float,
                       N: int, r: float, eps: float) -> np.ndarray:
     """Rasterise a Koch interface in the (z, y) cross-section.
@@ -309,6 +325,11 @@ def koch_interface_yz(y_c: np.ndarray, z_c: np.ndarray, Ly: float, Lz: float,
     The base interface runs wall-to-wall in z at y = Ly/2 and is Koch-folded in y
     (generation N). Returns c(y, z) of shape (len(y_c), len(z_c)) via a smoothed
     signed distance, c = 1/2 (1 + tanh(phi/eps)).
+
+    The interface DISTANCE comes from the open Koch polyline, but its SIGN (which
+    stream a cell belongs to) is taken from a point-in-polygon test on the interface
+    closed along the top wall. This is robust at high N; the older nearest-segment
+    side test produced wrong-sign corner patches for N>=3 (open-curve sign ambiguity).
 
     NOTE: this single-interface field is NOT periodic in y — c jumps 0->1 across the
     y = 0/Ly seam, which adds a spurious flat interface in a periodic box. Use
@@ -319,7 +340,12 @@ def koch_interface_yz(y_c: np.ndarray, z_c: np.ndarray, Ly: float, Lz: float,
     poly = _koch_polyline(motif, N, base=((0.0, Ly / 2.0), (Lz, Ly / 2.0)))
     ZZ, YY = np.meshgrid(z_c, y_c, indexing="xy")   # YY,ZZ shape (len(y), len(z))
     pts = np.stack([ZZ.ravel(), YY.ravel()], axis=1)
-    phi = _signed_distance(pts, poly).reshape(len(y_c), len(z_c))
+    dist = np.abs(_signed_distance(pts, poly))              # distance magnitude only
+    # close the interface into a polygon enclosing the UPPER (y > interface) stream,
+    # so c = 1 there matches the legacy N=0 convention
+    closed = np.vstack([poly, [Lz, Ly], [0.0, Ly]])
+    inside = _point_in_polygon(pts, closed)
+    phi = np.where(inside, dist, -dist).reshape(len(y_c), len(z_c))
     return 0.5 * (1.0 + np.tanh(phi / eps))
 
 
