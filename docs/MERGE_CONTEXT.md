@@ -399,6 +399,37 @@ This is the most faithful realisation achievable here — the real device geomet
 orifice, folded wall at the junction, developing flow) — and it reproduces the same NULL.
 The fractal inlet surface confers no mixing-length benefit.
 
+## Phase 6 — Sc=10 campaign + RECALIBRATED interpretation
+
+Important framing correction (per discussion with the proposal author): the earlier
+"decisive null" language oversold the result. There IS a real, monotonic N-signal even at
+Sc=0.5 — the inlet segregation drops with N (M(in) = 0.811, 0.796, 0.775 for N=0,1,2),
+i.e. the fractal's extra interfacial area genuinely speeds up EARLY mixing. What collapses
+is only the ASYMPTOTIC mixing length L_mix (set by the gravest cross-channel mode, which is
+N-independent). So the honest statement is: the fractal enhances mixing transiently; whether
+that shortens the full L_mix depends on regime, and the proposal's regime (high Sc; the
+surface's Re-driven near-wall secondary flow) is exactly where the transient window is longer.
+The proposal author works in a different flow regime — do not over-read these laminar,
+low-Pe results as a refutation of that regime.
+
+Compliance check vs the proposal reference (draft_BS.pdf): Re=40 ∈ [1,200] ✓, geometry
+(circular fractal inlet surface at constant area + Koch baffle, r=3, Df=1.262, N=0..4) ✓,
+but **Sc**: proposal ~1000 (water; Pe=Re·Sc up to ~2e5), ours was 0.5 (Pe=20). The IB
+(volume penalization) is treated IMPLICITLY so it imposes NO dt restriction; the dt limit
+is the explicit AB2 in-plane advection-diffusion (CFL), which tightens with grid refinement.
+Cost to reach high Sc scales ~Pe² (temporal box) / ~Pe³ (developing duct), because steps∝Pe
+(mix time) and cross-section grid∝√Pe (Batchelor scale, else false numerical diffusion fakes
+a null). Sc=10 is hours/run; Sc=100 days; true Sc=1000 is years/run (infeasible by direct DNS
+— same reason the proposal routes high-Sc to finite-volume OpenFOAM).
+
+Campaign (`scripts/mixing_campaign.py`, fixed verified dt, convergence early-stop,
+incremental history+snapshot+final checkpointing; SLURM in `slurm/`):
+- **baffle** (temporal box, smooth square duct, Koch baffle IC): pure cross-sectional
+  diffusion (v=w=0 in a straight duct) = the direct Eq.4 diffusive-limit test. dt=4e-4.
+- **surface_baffle** (short developing duct Lx=6, circular fractal inlet wall + Koch baffle):
+  steady M(x), resolves the near-inlet N-dependence. dt=5e-4.
+Both at Sc=10, N=0..4. Results pending (jobs 277/278).
+
 ## OVERALL CONCLUSION (torChannel, all accessible laminar regimes)
 L_mix(N)/L_mix(0) is FLAT (~1.0, never the proposed r^{-Df N}) across: plain duct Sc=1/16/100
 (0.98, Sc-independent to 5 sig figs), weak herringbone duct (1.00), AND a STRONG laminar
