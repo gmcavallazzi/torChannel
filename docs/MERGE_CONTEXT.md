@@ -247,8 +247,37 @@ fully-periodic channel path is unchanged (verified bit-for-bit by the regression
 
 Configs: `configs/duct_koch.yaml` (plain duct, Sc=1, central — the seam-free baseline)
 and `configs/duct_koch_highSc.yaml` (duct, Sc=16, TVD). Tests:
-`tests/test_scalar_tvd.py`. NEXT: run the plain-duct N-sweep (Sc~10-20) and compare
-L_mix(N)/L_mix(0) and χ(t) to the predicted r^{-Df N}; herringbone folding deferred.
+`tests/test_scalar_tvd.py`.
+
+### Phase 5 RESULT — duct N-sweep (Sc=1 AND Sc=16): r^{-Df N} REFUTED, Sc-independently
+Plain seam-free duct (no folding flow), single-interface Koch IC, N=0/1/2. The duct
+laminar flow is unidirectional (v=w=0) and the IC is x-homogeneous, so the scalar is
+EXACTLY cross-plane diffusion — the proposal's diffusive limit. Two independent drivers
+agree: `scripts/run_mixing.py` (full coupled solver, Sc=1) and
+`scripts/run_duct_diffusion.py` (velocity frozen=0, exercises the TVD scalar path; its
+Sc=1 reproduces the full solver to 3 sig figs — a method cross-check). `run_mixing.py`
+now also records chi(t)=<|grad c|^2>.
+- **L_mix(N)/L_mix(0) = 1.000 / 0.982 / 0.981 at BOTH Sc=1 and Sc=16** — identical to
+  FIVE significant figures (0.98234 / 0.98078 either Sc). Proposal predicts
+  r^{-Df N} = 1.000 / 0.250 / 0.062 (4x cut/generation). Measured ~2%. => Eq. 4 REFUTED,
+  and the refutation is **Sc-INDEPENDENT**: high Sc does NOT rescue it.
+- **t_mix scales exactly with Sc** (14.64 -> 234.3 = 16.0x), i.e. L_mix ∝ Pe ∝ Sc — the
+  textbook diffusive-limit signature, and why the ratio is Sc-invariant.
+- **The area-sensitive chi(N)/chi(0) DOES grow with N, and MORE at high Sc**
+  (Sc=1: 1.00/1.21/1.19; Sc=16: 1.00/1.25/1.30): the IC genuinely carries the extra
+  fractal interface (the null is PHYSICAL, not a resolution artifact) — but the global
+  mixing length is set by the gravest diffusive mode (duct width), which is N-blind.
+- TVD verified in anger: overshoot ~1e-14 at Sc=16 (central would wiggle at this cell-Pe).
+- Mechanism: a straight duct has no transverse stirring, so the fractal's fine scales just
+  diffuse before they matter. SAME negative as CaNS, now in torChannel's seam-free duct,
+  with the right observable (chi), across Sc=1->16, and with a monotone high-Sc scheme.
+- Figure: `results/figures/duct_koch_Nsweep.png` (`scripts/plot_duct_nsweep.py`).
+
+NEXT: the only remaining fair test is a CHAOTIC/stretching flow — the Phase-4 herringbone
+duct (reuse `kind='herringbone'` + `bc_y: wall`) at high Sc, or a turbulent duct. If
+L_mix(N) finally drops there, the proposal holds only in the chaotic regime; if it stays
+flat, that is the strong general negative. (Caveat for that run: use an AB2-stable dt —
+dt < dy^2/(4 nu) for momentum — the explicit AB2 in-plane diffusion is the limiter.)
 
 ---
 
