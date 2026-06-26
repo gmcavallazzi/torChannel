@@ -1,0 +1,65 @@
+# Phase 5 (strongest device-relevant test): STRONG laminar chaotic-advection duct.
+# Aggressive staggered-herringbone grooves (deep ridges, thin gap) drive a vigorous
+# transverse secondary flow (f_perp~0.11, ~15x the earlier weak herringbone) -- a
+# genuinely strong deterministic chaotic mixer, entirely LAMINAR at microfluidic
+# Re=100 (well within the proposal's Re in [1,200]; strength is GEOMETRY-driven, not
+# Re-driven -- tripling Re barely changed f_perp, deepening grooves changed it 7x).
+# NOT turbulence. Tests whether vigorous folding finally lets the fractal IC matter.
+grid:   {nx: 64, ny: 64, nz: 64}
+domain: {Lx: 3.1416, Ly: 1.0, Lz: 0.7, bc_y: wall}
+
+flow:
+  Re: 100.0
+  Re_tau: 10.0
+  U_bulk: 1.0
+  gamma: 0.4
+
+boundary_conditions:
+  top_wall: {type: "dirichlet"}
+
+initialization:
+  type: "parabolic"
+  perturbation_intensity: 0.0
+
+solver: {type: "fft"}
+
+time:
+  dt: 0.0025           # AB2-stable + advection-CFL safe for the strong secondary flow
+  n_steps: 12000
+  t_max: 100000.0
+  CFL_target: 0.25
+  dt_update_interval: 0
+  dt_max: 0.02
+  dt_min: 0.0001
+  scheme: "IMEX"
+
+compute: {device: "cuda"}
+
+output:
+  results_folder: results/herringbone_duct_strong
+  n_out: 100000
+  n_save: 100000
+
+statistics: {enabled: false, n_stats: 0}
+
+immersed:
+  enabled: true
+  kind: "herringbone"
+  h0: 0.18
+  A: 0.28              # deep ridges (z up to ~0.46) in the thin Lz=0.7 gap -> strong rolls
+  n_waves_x: 4
+  n_waves_y: 1
+  apex_frac: 0.33
+  stagger: true
+  eta: 1.0e-4
+
+scalar:
+  enabled: true
+  Sc: 16.0
+  wall_bc: "neumann"
+  scheme: "tvd"
+  init_type: "koch"
+  N: 0
+  r: 3.0
+  eps_cells: 1.0
+  theta: 0.5

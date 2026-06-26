@@ -315,20 +315,36 @@ would wiggle).
   speedup vs the log(Pe)~100x of a true SHM), so a vigorously chaotic flow at high Sc is
   the one case not closed.
 
+### STRONG laminar chaotic mixer — DONE (the open door, now closed): still flat
+`configs/herringbone_duct_strong.yaml`: deep staggered-herringbone grooves (h0=0.18, A=0.28,
+thin Lz=0.7 gap, 4 chevron cycles), Re=100, Sc=16 TVD, 64^3. Key finding from a config probe:
+the chaotic strength is GEOMETRY-driven, not Re-driven (tripling Re 50->200 barely moved
+f_perp 0.022->0.036; deepening grooves moved it 7x). So a vigorous laminar mixer is reachable
+WELL WITHIN the proposal's Re in [1,200] — no turbulence, no edge-of-range Re needed.
+- f_perp=0.11 (15x the earlier weak herringbone); it mixes hard: L_mix(N=0)=29.6 vs the
+  diffusive 234 (8x faster) — genuinely strong, approaching but not at the log(Pe) floor.
+- **L_mix(N)/L_mix(0) = 1.000 / 0.977 / 0.977 — still FLAT** (2.3% dip that SATURATES; N=2
+  does not beat N=1). chi(N)/chi(0) = 1.00/1.43/1.49 (strongest fractal-area signal yet, since
+  the strong mixer + high cell-Pe preserves more interface). Predicted r^{-Df N}=0.25/0.062.
+- Snapshots (`results/figures/snapshots_herringbone.png`): by t=4 the chaotic flow imposes its
+  OWN folding pattern and N=0 vs N=2 are visually indistinguishable through homogenisation —
+  the fractal IC is folded away, not amplified. Matches the a-priori log-law bound
+  L_mix(N)/L_mix(0) ~ 1-(Df-1)ln(r)N/lnPe (a few % dip, never the power law).
+- TVD verified at cell-Pe=78 (overshoot ~9e-14). Snapshot/IC figures via
+  `scripts/snapshot_fields.py`; combined plot `scripts/plot_all_nsweep.py`.
+
+A standalone rebuttal write-up (setup + TikZ sketch, all tables/figures, mechanism,
+limitations) lives in `rebuttal/` (git-EXCLUDED via .git/info/exclude, not tracked).
+
 ## OVERALL CONCLUSION (torChannel, all accessible laminar regimes)
-L_mix(N)/L_mix(0) is FLAT (~1.0, never the proposed r^{-Df N}) across: plain duct Sc=1
-and Sc=16 (0.98, Sc-independent to 5 sig figs) AND herringbone duct Sc=16 (1.00). The
-area-sensitive chi DOES see the fractal everywhere (1.2-1.3x) — the null is physical, not
-a resolution/observable artifact. **Eq. 4 (the proposal's only sharp falsifiable claim)
-is refuted in every laminar regime reachable here**, including its intended high-Sc regime
-and with an active secondary flow. The one device-relevant door left open: a STRONG LAMINAR
-CHAOTIC-ADVECTION flow (deterministic exponential stretching — a vigorous staggered
-herringbone mixer, NOT turbulence) at microfluidic Re and high Sc; my herringbone was too
-weak (~2.6x speedup vs the ~log(Pe) of a real SHM). NB chaotic advection != turbulence:
-the device is laminar (Re 1-200) and needs deterministic folding, not high-Re eddies. A
-turbulent run would only test the proposal's TNTI-entrainment ANALOGY (its conceptual
-ancestor, Sec 2.4), not the microfluidic device — separate, academic question. The other
-untested door is the headline unchanged-pressure-drop (Falk-Commenge) claim. Both need
+L_mix(N)/L_mix(0) is FLAT (~1.0, never the proposed r^{-Df N}) across: plain duct Sc=1/16/100
+(0.98, Sc-independent to 5 sig figs), weak herringbone duct (1.00), AND a STRONG laminar
+chaotic mixer (0.977, saturating). The area-sensitive chi DOES see the fractal everywhere
+(1.2-1.5x) — the null is physical, not a resolution/observable artifact. **Eq. 4 (the
+proposal's only sharp falsifiable claim) is refuted in every laminar regime reachable here**,
+including its intended high-Sc regime AND a vigorous deterministic chaotic-advection flow
+(geometry-driven, fully within Re in [1,200]; NOT turbulence). The remaining untested door is
+now essentially just the headline unchanged-pressure-drop (Falk-Commenge) claim, which needs
 machinery beyond the present periodic-box temporal framing.
 
 ---
