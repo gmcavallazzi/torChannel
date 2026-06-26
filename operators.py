@@ -16,6 +16,30 @@ Velocities are staggered:
 """
 
 @torch.jit.script
+def _d2v_dy2_raw(v: torch.Tensor, nx: int, ny: int, nz: int,
+                 bc_y: str = 'periodic') -> torch.Tensor:
+    """Raw 2nd y-difference of v over the interior slice [1:nx+1, 1:ny+1, 1:nz+1]
+    (multiply by 1/dy**2 at the call site). v is staggered in y (faces 0..ny).
+
+    - 'periodic' (default): wrap face 0<->ny — numerically identical to the prior
+      inlined `torch.cat([v, v[:, 1:2, :]], dim=1)` stencil.
+    - 'wall' (duct): no-slip walls at faces 0 and ny (v=0). Only interior faces
+      1..ny-1 get a real stencil (using the wall values v[:,0]=v[:,ny]=0); the wall
+      face ny is left 0 here (it is pinned by the velocity BC each substep).
+    """
+    if bc_y == 'wall':
+        out = torch.zeros_like(v[1:nx+1, 1:ny+1, 1:nz+1])
+        out[:, 0:ny-1, :] = (v[1:nx+1, 2:ny+1, 1:nz+1]
+                             - 2.0 * v[1:nx+1, 1:ny, 1:nz+1]
+                             + v[1:nx+1, 0:ny-1, 1:nz+1])
+        return out
+    else:
+        v_ext_y = torch.cat([v, v[:, 1:2, :]], dim=1)
+        return (v_ext_y[1:nx+1, 2:ny+2, 1:nz+1]
+                - 2.0 * v_ext_y[1:nx+1, 1:ny+1, 1:nz+1]
+                + v_ext_y[1:nx+1, 0:ny, 1:nz+1])
+
+@torch.jit.script
 def diffusion_u(u: torch.Tensor, nx: int, ny: int, nz: int,
                 dx: float, dy: float, dz_c: torch.Tensor, dz_f: torch.Tensor,
                 nu: float) -> torch.Tensor:
@@ -57,7 +81,7 @@ def diffusion_u(u: torch.Tensor, nx: int, ny: int, nz: int,
 @torch.jit.script
 def diffusion_v(v: torch.Tensor, nx: int, ny: int, nz: int,
                 dx: float, dy: float, dz_c: torch.Tensor, dz_f: torch.Tensor,
-                nu: float) -> torch.Tensor:
+                nu: float, bc_y: str = 'periodic') -> torch.Tensor:
     """Compute diffusion term for v-component: nu * laplacian(v). JIT-compiled."""
     diff_v = torch.zeros_like(v)
 
@@ -68,14 +92,8 @@ def diffusion_v(v: torch.Tensor, nx: int, ny: int, nz: int,
                2*v[1:nx+1, 1:ny+1, 1:nz+1] +
                v[0:nx, 1:ny+1, 1:nz+1]) / dx**2
 
-    # Second derivative in y (uniform spacing, periodic)
-    # v is staggered in y, indices 0..ny. v[0]=v[ny].
-    # Construct extended v in y: [v[0]...v[ny], v[1]]
-    v_ext_y = torch.cat([v, v[:, 1:2, :]], dim=1)
-
-    d2v_dy2 = (v_ext_y[1:nx+1, 2:ny+2, 1:nz+1] -
-               2*v_ext_y[1:nx+1, 1:ny+1, 1:nz+1] +
-               v_ext_y[1:nx+1, 0:ny, 1:nz+1]) / dy**2
+    # Second derivative in y (uniform spacing); periodic or no-slip walls (duct)
+    d2v_dy2 = _d2v_dy2_raw(v, nx, ny, nz, bc_y) / dy**2
 
     # Second derivative in z (stretched grid, non-uniform spacing)
     # v is at cell centers. Same as u.
@@ -275,7 +293,7 @@ def compute_momentum_rhs_fused(
     nx: int, ny: int, nz: int,
     dx: float, dy: float, 
     dz_c: torch.Tensor, dz_f: torch.Tensor,
-    nu: float
+    nu: float, bc_y: str = 'periodic'
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Compute momentum RHS combining advection + diffusion in single pass.
@@ -390,10 +408,7 @@ def compute_momentum_rhs_fused(
                v[0:nx, 1:ny+1, 1:nz+1]) / (dx**2)
 
     # d2v/dy2
-    v_ext_y = torch.cat([v, v[:, 1:2, :]], dim=1)
-    d2v_dy2 = (v_ext_y[1:nx+1, 2:ny+2, 1:nz+1] -
-               2*v_ext_y[1:nx+1, 1:ny+1, 1:nz+1] +
-               v_ext_y[1:nx+1, 0:ny, 1:nz+1]) / (dy**2)
+    d2v_dy2 = _d2v_dy2_raw(v, nx, ny, nz, bc_y) / (dy**2)
 
     # d2v/dz2 (non-uniform grid)
     d2v_dz2 = ((v[1:nx+1, 1:ny+1, 2:nz+2] -
@@ -499,7 +514,7 @@ def diffusion_xy_u(u: torch.Tensor, nx: int, ny: int, nz: int,
 
 @torch.jit.script
 def diffusion_xy_v(v: torch.Tensor, nx: int, ny: int, nz: int,
-                   dx: float, dy: float, nu: float) -> torch.Tensor:
+                   dx: float, dy: float, nu: float, bc_y: str = 'periodic') -> torch.Tensor:
     """
     Compute explicit diffusion terms for v-component in x and y directions only.
     Used in IMEX scheme where z-diffusion is treated implicitly.
@@ -512,11 +527,8 @@ def diffusion_xy_v(v: torch.Tensor, nx: int, ny: int, nz: int,
                2*v[1:nx+1, 1:ny+1, 1:nz+1] +
                v[0:nx, 1:ny+1, 1:nz+1]) / dx**2
 
-    # Second derivative in y (uniform spacing, periodic)
-    v_ext_y = torch.cat([v, v[:, 1:2, :]], dim=1)
-    d2v_dy2 = (v_ext_y[1:nx+1, 2:ny+2, 1:nz+1] -
-               2*v_ext_y[1:nx+1, 1:ny+1, 1:nz+1] +
-               v_ext_y[1:nx+1, 0:ny, 1:nz+1]) / dy**2
+    # Second derivative in y (uniform spacing); periodic or no-slip walls (duct)
+    d2v_dy2 = _d2v_dy2_raw(v, nx, ny, nz, bc_y) / dy**2
 
     diff_v[1:nx+1, 1:ny+1, 1:nz+1] = nu * (d2v_dx2 + d2v_dy2)
 
@@ -821,7 +833,7 @@ def compute_momentum_rhs_fused_v2(
     nx: int, ny: int, nz: int,
     dx: float, dy: float,
     dz_c: torch.Tensor, dz_f: torch.Tensor,
-    nu: float
+    nu: float, bc_y: str = 'periodic'
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Enhanced fused kernel for AB2 scheme: advection + full 3D diffusion.
@@ -958,10 +970,7 @@ def compute_momentum_rhs_fused_v2(
                v[0:nx, 1:ny+1, 1:nz+1]) * nu_dx2
 
     # d2v/dy2 - periodic
-    v_ext_y = torch.cat([v, v[:, 1:2, :]], dim=1)
-    d2v_dy2 = (v_ext_y[1:nx+1, 2:ny+2, 1:nz+1] -
-               2.0 * v_ext_y[1:nx+1, 1:ny+1, 1:nz+1] +
-               v_ext_y[1:nx+1, 0:ny, 1:nz+1]) * nu_dy2
+    d2v_dy2 = _d2v_dy2_raw(v, nx, ny, nz, bc_y) * nu_dy2
 
     # d2v/dz2 - non-uniform grid (same indexing as u)
     d2v_dz2 = nu * ((v[1:nx+1, 1:ny+1, 2:nz+2] - v[1:nx+1, 1:ny+1, 1:nz+1]) * dz_right -
@@ -1040,7 +1049,7 @@ def compute_momentum_rhs_fused_imex(
     nx: int, ny: int, nz: int,
     dx: float, dy: float,
     dz_c: torch.Tensor, dz_f: torch.Tensor,
-    nu: float
+    nu: float, bc_y: str = 'periodic'
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Fused kernel for IMEX scheme: advection + XY-diffusion only.
@@ -1162,10 +1171,7 @@ def compute_momentum_rhs_fused_imex(
                v[0:nx, 1:ny+1, 1:nz+1]) * nu_dx2
 
     # d2v/dy2 - periodic
-    v_ext_y = torch.cat([v, v[:, 1:2, :]], dim=1)
-    d2v_dy2 = (v_ext_y[1:nx+1, 2:ny+2, 1:nz+1] -
-               2.0 * v_ext_y[1:nx+1, 1:ny+1, 1:nz+1] +
-               v_ext_y[1:nx+1, 0:ny, 1:nz+1]) * nu_dy2
+    d2v_dy2 = _d2v_dy2_raw(v, nx, ny, nz, bc_y) * nu_dy2
 
     diffusion_xy_v = d2v_dx2 + d2v_dy2  # Note: NO d2v_dz2
 

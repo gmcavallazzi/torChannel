@@ -9,7 +9,8 @@ from operators import diffusion_u, diffusion_v, diffusion_w, advection_u, advect
 from projection import build_poisson_matrix, solve_poisson, project_velocity
 from projection_fft import initialize_fft_solver, solve_poisson_fft
 from turbstats import TurbulenceStats
-from scalar import (apply_scalar_bc, advection_scalar, diffusion_xy_scalar,
+from scalar import (apply_scalar_bc, advection_scalar, advection_scalar_tvd,
+                    diffusion_xy_scalar,
                     solve_implicit_diffusion_scalar, initialize_scalar,
                     scalar_stats, save_scalar_field, load_scalar_field)
 from immersed import build_masks, penalize, fluid_cell_volume, solid_fraction
@@ -25,7 +26,7 @@ if os.environ.get("TORCHANNEL_COMPILE", "0") == "1":
 
 
 @torch.jit.script
-def apply_bc_all(u: torch.Tensor, v: torch.Tensor, w: torch.Tensor, top_wall_bc_type: str = 'dirichlet') -> None:
+def apply_bc_all(u: torch.Tensor, v: torch.Tensor, w: torch.Tensor, top_wall_bc_type: str = 'dirichlet', bc_y: str = 'periodic') -> None:
     """
     Apply boundary conditions to all velocity components in a single fused kernel.
     This reduces 3 separate kernel launches to 1, improving GPU performance.
@@ -44,41 +45,40 @@ def apply_bc_all(u: torch.Tensor, v: torch.Tensor, w: torch.Tensor, top_wall_bc_
         w: Wall-normal velocity (staggered in z)
         top_wall_bc_type: 'dirichlet' (no-slip) or 'neumann' (free-slip)
     """
-    # U-velocity boundary conditions
-    # Periodic BC in x (u is staggered in x, shape nx+1)
-    u[0, :, :] = u[-1, :, :]
-    # Periodic BC in y (u is NOT staggered in y)
-    u[:, 0, :] = u[:, -2, :]
-    u[:, -1, :] = u[:, 1, :]
-    # BC in z: bottom wall always Dirichlet, top wall depends on type
+    # ---- x-direction: periodic (always) ----
+    u[0, :, :] = u[-1, :, :]    # u staggered in x (shape nx+1)
+    v[0, :, :] = v[-2, :, :]    # v NOT staggered in x
+    v[-1, :, :] = v[1, :, :]
+    w[0, :, :] = w[-2, :, :]    # w NOT staggered in x
+    w[-1, :, :] = w[1, :, :]
+
+    # ---- y-direction: periodic, or no-slip walls (duct) ----
+    if bc_y == 'wall':
+        # No-slip walls at y=0 and y=Ly.
+        u[:, 0, :] = -u[:, 1, :]    # u cell-centred in y: reflection -> u=0 at wall
+        u[:, -1, :] = -u[:, -2, :]
+        v[:, 0, :] = 0.0           # v staggered in y: wall-normal, v=0 at both faces
+        v[:, -1, :] = 0.0
+        w[:, 0, :] = -w[:, 1, :]    # w cell-centred in y: reflection -> w=0 at wall
+        w[:, -1, :] = -w[:, -2, :]
+    else:
+        u[:, 0, :] = u[:, -2, :]    # periodic (u NOT staggered in y)
+        u[:, -1, :] = u[:, 1, :]
+        v[:, 0, :] = v[:, -1, :]    # periodic (v staggered in y, v[0]=v[ny])
+        w[:, 0, :] = w[:, -2, :]    # periodic (w NOT staggered in y)
+        w[:, -1, :] = w[:, 1, :]
+
+    # ---- z-direction: bottom no-slip, top per top_wall_bc_type; w=0 at both walls ----
     u[:, :, 0] = -u[:, :, 1]  # Bottom: Dirichlet (no-slip, u=0)
     if top_wall_bc_type == 'neumann':
         u[:, :, -1] = u[:, :, -2]  # Top: Neumann (free-slip, ∂u/∂z=0)
     else:
         u[:, :, -1] = -u[:, :, -2]  # Top: Dirichlet (no-slip, u=0)
-
-    # V-velocity boundary conditions
-    # Periodic BC in x (v is NOT staggered in x)
-    v[0, :, :] = v[-2, :, :]
-    v[-1, :, :] = v[1, :, :]
-    # Periodic BC in y (v is staggered in y, shape ny+1)
-    v[:, 0, :] = v[:, -1, :]
-    # BC in z: bottom wall always Dirichlet, top wall depends on type
     v[:, :, 0] = -v[:, :, 1]  # Bottom: Dirichlet (no-slip, v=0)
     if top_wall_bc_type == 'neumann':
         v[:, :, -1] = v[:, :, -2]  # Top: Neumann (free-slip, ∂v/∂z=0)
     else:
         v[:, :, -1] = -v[:, :, -2]  # Top: Dirichlet (no-slip, v=0)
-
-    # W-velocity boundary conditions
-    # Periodic BC in x (w is NOT staggered in x)
-    w[0, :, :] = w[-2, :, :]
-    w[-1, :, :] = w[1, :, :]
-    # Periodic BC in y (w is NOT staggered in y)
-    w[:, 0, :] = w[:, -2, :]
-    w[:, -1, :] = w[:, 1, :]
-    # BC in z: w=0 at both walls (no penetration, always Dirichlet)
-    # This is true for BOTH 'dirichlet' and 'neumann' top_wall_bc_type
     w[:, :, 0] = 0.0   # Bottom wall: w = 0
     w[:, :, -1] = 0.0  # Top wall: w = 0 (even for 'neumann' type)
 
@@ -121,6 +121,12 @@ class ChannelFlow:
         self.Lz = config['domain']['Lz']
         self.stretching_type = config['domain'].get('stretching_type', 'symmetric')
 
+        # Spanwise (y) boundary condition: 'periodic' (default, unchanged) or 'wall'
+        # (no-slip walls in y -> a rectangular duct; the FFT-Poisson uses a DCT in y).
+        self.bc_y = config['domain'].get('bc_y', 'periodic')
+        if self.bc_y not in ['periodic', 'wall']:
+            raise ValueError(f"Invalid domain.bc_y: {self.bc_y}. Must be 'periodic' or 'wall'")
+
         # Validate stretching type
         if self.stretching_type not in ['symmetric', 'bottom', 'hybrid']:
             raise ValueError(f"Invalid stretching type: {self.stretching_type}. Must be 'symmetric', 'bottom', or 'hybrid'")
@@ -140,6 +146,7 @@ class ChannelFlow:
             raise ValueError(f"Invalid top wall BC type: {self.top_wall_bc_type}. Must be 'dirichlet' or 'neumann'")
 
         print(f"Top wall BC type: {self.top_wall_bc_type}", flush=True)
+        print(f"Spanwise BC (bc_y): {self.bc_y}", flush=True)
 
         self.dt = config['time']['dt']
         self.n_steps = config['time']['n_steps']
@@ -293,7 +300,8 @@ class ChannelFlow:
             # Initialize FFT-based Poisson solver
             self.fft_data = initialize_fft_solver(self.nx, self.ny, self.nz,
                                                     self.dx, self.dy, self.dz_c, self.dz_f,
-                                                    top_wall_bc_type=self.top_wall_bc_type)
+                                                    top_wall_bc_type=self.top_wall_bc_type,
+                                                    bc_y=self.bc_y)
         else:
             raise ValueError(f"Unknown solver type: {self.solver_type}")
 
@@ -347,6 +355,11 @@ class ChannelFlow:
             self.scalar_D = self.nu / self.Sc            # scalar diffusivity
             self.scalar_wall_bc = scalar_config.get('wall_bc', 'neumann')
             self.scalar_theta = scalar_config.get('theta', 0.5)
+            # Advection scheme: 'central' (default, 2nd-order) or 'tvd' (van Leer
+            # flux limiter — monotone at high cell-Pe, for high-Schmidt runs).
+            self.scalar_scheme = scalar_config.get('scheme', 'central')
+            if self.scalar_scheme not in ['central', 'tvd']:
+                raise ValueError(f"Invalid scalar.scheme: {self.scalar_scheme}. Must be 'central' or 'tvd'")
             self.rhs_c_curr = None
             self.rhs_c_prev = None
             scalar_field_file = scalar_config.get('field_file', None)
@@ -360,7 +373,7 @@ class ChannelFlow:
                     eps_cells=scalar_config.get('eps_cells', 1.0),
                     N=scalar_config.get('N', 0), r=scalar_config.get('r', 3.0),
                     device=self.device)
-            apply_scalar_bc(self.scalar, self.scalar_wall_bc)
+            apply_scalar_bc(self.scalar, self.scalar_wall_bc, self.bc_y)
             s0 = scalar_stats(self.scalar, self.nx, self.ny, self.nz, self.dz_f)
             print(f"Passive scalar enabled: Sc={self.Sc}, D={self.scalar_D:.3e}, "
                   f"wall_bc={self.scalar_wall_bc}, init mean={s0['mean']:.4f}, "
@@ -494,9 +507,13 @@ class ChannelFlow:
         # u[0] is left face, u[nx] is right face. Periodic: u[0] = u[nx].
         # u indices: 0..nx. u[-1] is u[nx].
         self.u[0, :, :] = self.u[-1, :, :]
-        # Periodic BC in y (u is NOT staggered in y)
-        self.u[:, 0, :] = self.u[:, -2, :]
-        self.u[:, -1, :] = self.u[:, 1, :]
+        # BC in y: periodic, or no-slip walls (duct)
+        if self.bc_y == 'wall':
+            self.u[:, 0, :] = -self.u[:, 1, :]
+            self.u[:, -1, :] = -self.u[:, -2, :]
+        else:
+            self.u[:, 0, :] = self.u[:, -2, :]
+            self.u[:, -1, :] = self.u[:, 1, :]
 
         # BC in z: bottom wall always Dirichlet, top wall depends on type
         self.u[:, :, 0] = -self.u[:, :, 1]  # Bottom: Dirichlet (no-slip)
@@ -513,7 +530,11 @@ class ChannelFlow:
         # Periodic BC in y (v is staggered in y, shape ny+1)
         # v[0] is bottom face, v[ny] is top face. Periodic: v[0] = v[ny].
         # v indices: 0..ny. v[-1] is v[ny].
-        self.v[:, 0, :] = self.v[:, -1, :]
+        if self.bc_y == 'wall':
+            self.v[:, 0, :] = 0.0     # wall-normal velocity = 0 at both y-walls
+            self.v[:, -1, :] = 0.0
+        else:
+            self.v[:, 0, :] = self.v[:, -1, :]
         # BC in z: bottom wall always Dirichlet, top wall depends on type
         self.v[:, :, 0] = -self.v[:, :, 1]  # Bottom: Dirichlet (no-slip)
         if self.top_wall_bc_type == 'neumann':
@@ -526,16 +547,20 @@ class ChannelFlow:
         # Periodic BC in x (w is NOT staggered in x)
         self.w[0, :, :] = self.w[-2, :, :]
         self.w[-1, :, :] = self.w[1, :, :]
-        # Periodic BC in y (w is NOT staggered in y)
-        self.w[:, 0, :] = self.w[:, -2, :]
-        self.w[:, -1, :] = self.w[:, 1, :]
+        # BC in y: periodic, or no-slip walls (duct)
+        if self.bc_y == 'wall':
+            self.w[:, 0, :] = -self.w[:, 1, :]
+            self.w[:, -1, :] = -self.w[:, -2, :]
+        else:
+            self.w[:, 0, :] = self.w[:, -2, :]
+            self.w[:, -1, :] = self.w[:, 1, :]
         # Dirichlet BC in z (w is staggered in z, w=0 at walls)
         self.w[:, :, 0] = 0.0
         self.w[:, :, -1] = 0.0
 
     def apply_bc_uvw(self):
         """Apply boundary conditions to all velocity components (optimized fused kernel)"""
-        apply_bc_all(self.u, self.v, self.w, self.top_wall_bc_type)
+        apply_bc_all(self.u, self.v, self.w, self.top_wall_bc_type, self.bc_y)
 
     def compute_cfl_dt(self):
         """
@@ -584,7 +609,7 @@ class ChannelFlow:
                 self.u, self.v, self.w,
                 self.nx, self.ny, self.nz,
                 self.dx, self.dy, self.dz_c, self.dz_f,
-                self.nu
+                self.nu, self.bc_y
             )
         else:
             # Original separate kernels (CPU fallback or if fused not available)
@@ -597,8 +622,8 @@ class ChannelFlow:
             
             diff_u = diffusion_u(self.u, self.nx, self.ny, self.nz, 
                                 self.dx, self.dy, self.dz_c, self.dz_f, self.nu)
-            diff_v = diffusion_v(self.v, self.nx, self.ny, self.nz, 
-                                self.dx, self.dy, self.dz_c, self.dz_f, self.nu)
+            diff_v = diffusion_v(self.v, self.nx, self.ny, self.nz,
+                                self.dx, self.dy, self.dz_c, self.dz_f, self.nu, self.bc_y)
             diff_w = diffusion_w(self.w, self.nx, self.ny, self.nz, 
                                 self.dx, self.dy, self.dz_c, self.dz_f, self.nu) # Corrected dz_f, dz_c order
             
@@ -680,7 +705,7 @@ class ChannelFlow:
                 self.u, self.v, self.w,
                 self.nx, self.ny, self.nz,
                 self.dx, self.dy, self.dz_c, self.dz_f,
-                self.nu
+                self.nu, self.bc_y
             )
         else:
             # Original separate kernels (CPU fallback or debugging)
@@ -696,7 +721,7 @@ class ChannelFlow:
             diff_xy_u = diffusion_xy_u(self.u, self.nx, self.ny, self.nz,
                                        self.dx, self.dy, self.nu)
             diff_xy_v = diffusion_xy_v(self.v, self.nx, self.ny, self.nz,
-                                       self.dx, self.dy, self.nu)
+                                       self.dx, self.dy, self.nu, self.bc_y)
             diff_xy_w = diffusion_xy_w(self.w, self.nx, self.ny, self.nz,
                                        self.dx, self.dy, self.nu)
 
@@ -817,10 +842,15 @@ class ChannelFlow:
         scalar is passive, so there is no projection.
         """
         D = self.scalar_D
-        apply_scalar_bc(self.scalar, self.scalar_wall_bc)
+        apply_scalar_bc(self.scalar, self.scalar_wall_bc, self.bc_y)
 
-        adv_c = advection_scalar(self.scalar, self.u, self.v, self.w,
-                                 self.nx, self.ny, self.nz, self.dx, self.dy, self.dz_f)
+        if self.scalar_scheme == 'tvd':
+            adv_c = advection_scalar_tvd(self.scalar, self.u, self.v, self.w,
+                                         self.nx, self.ny, self.nz, self.dx, self.dy,
+                                         self.dz_f, self.bc_y, self.scalar_wall_bc)
+        else:
+            adv_c = advection_scalar(self.scalar, self.u, self.v, self.w,
+                                     self.nx, self.ny, self.nz, self.dx, self.dy, self.dz_f)
         diff_xy_c = diffusion_xy_scalar(self.scalar, self.nx, self.ny, self.nz,
                                         self.dx, self.dy, D)
         rhs_c = diff_xy_c - adv_c
@@ -831,11 +861,11 @@ class ChannelFlow:
             self.scalar = self.scalar + dt * (1.5 * rhs_c - 0.5 * self.rhs_c_prev)
         self.rhs_c_prev = rhs_c
 
-        apply_scalar_bc(self.scalar, self.scalar_wall_bc)
+        apply_scalar_bc(self.scalar, self.scalar_wall_bc, self.bc_y)
         self.scalar = solve_implicit_diffusion_scalar(
             self.scalar, float(dt), self.nx, self.ny, self.nz, self.dz_c, self.dz_f,
             D, theta=self.scalar_theta, wall_bc=self.scalar_wall_bc)
-        apply_scalar_bc(self.scalar, self.scalar_wall_bc)
+        apply_scalar_bc(self.scalar, self.scalar_wall_bc, self.bc_y)
 
     def step_rk3(self, dt):
         """

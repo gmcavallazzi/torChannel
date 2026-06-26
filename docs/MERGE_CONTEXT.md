@@ -216,6 +216,40 @@ been fairly tested in its intended high-Pe, fully-stirred chaotic regime.
 2. Then **high Sc with a TVD/flux-limited scalar** so fine scales survive — fixes #1
    (the expensive, decisive step).
 
+## Phase 5 ENABLERS — IMPLEMENTED in torChannel (2026-06-26)
+
+Two additive, flag-gated capabilities were added so the temporal periodic-box test
+becomes a FAIR test WITHOUT inlet/outlet (which are non-essential: in the diffusive
+limit the temporal duct equals the spatial developing problem via x=U·t, and the
+L_mix(N)/L_mix(0) ratio is provably Sc-independent). Both default OFF; the existing
+fully-periodic channel path is unchanged (verified bit-for-bit by the regression tests).
+
+1. **Seam-free DUCT — no-slip walls in y (`domain.bc_y: periodic|wall`).** A spanwise
+   DCT-II replaces the y-FFT in the pressure Poisson (`projection_fft.py`): y is uniform,
+   so a cosine transform (cell-centred Neumann pressure) decouples into the SAME
+   tridiagonal-in-z solves; implemented with a precomputed cosine matrix
+   (`ky_mod = (2/dy)·sin(πk/(2ny))`), round-trips to ~1e-15. Wall velocity BCs (no-slip
+   reflection for u,w; v=0 at y-faces) added to `apply_bc_all` + a wall variant of the v
+   y-diffusion in `operators.py` (`_d2v_dy2_raw`); scalar gets no-flux y-walls in
+   `apply_scalar_bc`. **With real y-walls the spanwise seam is gone, so the proposal's
+   single two-stream interface `init_type:'koch'` is now the correct IC** (the
+   `koch_strip` workaround is no longer needed). Validated: manufactured-solution Poisson
+   exact to 1e-15; live duct run max|div|=0, spanwise symmetry 2e-16, no-slip enforced,
+   u_max/u_bulk≈1.9 (square-duct ~2.1, developing).
+
+2. **High-Sc TVD scalar (`scalar.scheme: central|tvd`).** `advection_scalar_tvd` in
+   `scalar.py`: conservative flux-form with a van Leer MUSCL limiter (2-cell halo built
+   per direction from the BCs). Monotone/bounded at high cell-Pe where the central scheme
+   overshoots (validated cell-Pe≈40: central overshoots ±0.36 / blows up under FE; TVD
+   stays in [0,1] to 1e-12 and conserves the mean). Face velocity is 0 at every wall, so
+   the limiter never touches a wall flux. End-to-end duct+Koch+TVD at Sc=16: max|div|=0,
+   c∈[0,1], mean conserved to 4e-16.
+
+Configs: `configs/duct_koch.yaml` (plain duct, Sc=1, central — the seam-free baseline)
+and `configs/duct_koch_highSc.yaml` (duct, Sc=16, TVD). Tests:
+`tests/test_scalar_tvd.py`. NEXT: run the plain-duct N-sweep (Sc~10-20) and compare
+L_mix(N)/L_mix(0) and χ(t) to the predicted r^{-Df N}; herringbone folding deferred.
+
 ---
 
 ## (superseded) earlier recommendation — chaotic folding (staggered herringbone)

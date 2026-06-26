@@ -33,14 +33,19 @@ from operators import solve_tridiagonal_batch
 # Boundary conditions
 # ---------------------------------------------------------------------------
 @torch.jit.script
-def apply_scalar_bc(c: torch.Tensor, wall_bc: str = 'neumann') -> None:
-    """Fill ghost cells: periodic in x,y; Neumann or Dirichlet(0) walls in z."""
+def apply_scalar_bc(c: torch.Tensor, wall_bc: str = 'neumann', bc_y: str = 'periodic') -> None:
+    """Fill ghost cells: periodic in x; periodic or no-flux walls in y (duct);
+    Neumann or Dirichlet(0) walls in z."""
     # Periodic in x (cell-centred: ghosts at 0 and -1)
     c[0, :, :] = c[-2, :, :]
     c[-1, :, :] = c[1, :, :]
-    # Periodic in y
-    c[:, 0, :] = c[:, -2, :]
-    c[:, -1, :] = c[:, 1, :]
+    # y: periodic, or no-flux walls (duct)
+    if bc_y == 'wall':
+        c[:, 0, :] = c[:, 1, :]      # dc/dy = 0 at wall (no scalar flux through wall)
+        c[:, -1, :] = c[:, -2, :]
+    else:
+        c[:, 0, :] = c[:, -2, :]
+        c[:, -1, :] = c[:, 1, :]
     # Walls in z
     if wall_bc == 'dirichlet':
         c[:, :, 0] = -c[:, :, 1]     # c = 0 at wall
@@ -80,6 +85,75 @@ def advection_scalar(c: torch.Tensor, u: torch.Tensor, v: torch.Tensor,
     Hzr = w[1:nx+1, 1:ny+1, 1:nz+1] * 0.5 * (ci + c[1:nx+1, 1:ny+1, 2:nz+2])
     Hzl = w[1:nx+1, 1:ny+1, 0:nz]   * 0.5 * (c[1:nx+1, 1:ny+1, 0:nz] + ci)
     dwdz = (Hzr - Hzl) / dz_f.view(1, 1, -1)
+
+    adv[1:nx+1, 1:ny+1, 1:nz+1] = dudx + dvdy + dwdz
+    return adv
+
+
+@torch.jit.script
+def _vanleer(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+    """van Leer limited slope: 2ab/(a+b) when a,b have the same sign, else 0
+    (div-by-zero safe). Returns the limited undivided difference at a cell."""
+    ab = a * b
+    return torch.where(ab > 0.0, 2.0 * ab / (a + b + 1e-30), torch.zeros_like(ab))
+
+
+@torch.jit.script
+def advection_scalar_tvd(c: torch.Tensor, u: torch.Tensor, v: torch.Tensor,
+                         w: torch.Tensor, nx: int, ny: int, nz: int,
+                         dx: float, dy: float, dz_f: torch.Tensor,
+                         bc_y: str = 'periodic', wall_bc: str = 'neumann') -> torch.Tensor:
+    """Conservative flux-form advection div(u c) with a van Leer flux limiter.
+
+    Same conservative discretisation as `advection_scalar`, but each face value is a
+    MUSCL upwind reconstruction with the van Leer limiter instead of the central
+    average, so the scheme is TVD/monotone — no dispersive over/undershoot at the
+    high cell-Peclet of high-Schmidt runs. Requires up-to-date 1-cell ghosts (call
+    after apply_scalar_bc); the 2nd ghost layer each reconstruction needs is built
+    here per direction from the BCs (periodic wrap, no-flux reflection, or
+    Dirichlet negation). Face velocity is exactly 0 at every wall, so the limiter
+    never affects a wall flux.
+    """
+    adv = torch.zeros_like(c)
+
+    # ---------- x: periodic (2nd ghosts = interior wrap cells) ----------
+    cx = torch.cat([c[nx-1:nx, :, :], c, c[2:3, :, :]], dim=0)   # logical cells -1..nx+2
+    sf   = _vanleer(cx[1:nx+2] - cx[0:nx+1], cx[2:nx+3] - cx[1:nx+2])   # slope at cell f
+    sfp1 = _vanleer(cx[2:nx+3] - cx[1:nx+2], cx[3:nx+4] - cx[2:nx+3])   # slope at cell f+1
+    Uf = u[0:nx+1, :, :]
+    cfx = torch.where(Uf >= 0.0, cx[1:nx+2] + 0.5 * sf, cx[2:nx+3] - 0.5 * sfp1)
+    Fx = Uf * cfx
+    dudx = (Fx[1:nx+1, 1:ny+1, 1:nz+1] - Fx[0:nx, 1:ny+1, 1:nz+1]) / dx
+
+    # ---------- y: periodic or no-slip walls (duct) ----------
+    if bc_y == 'wall':
+        cyL = c[:, 2:3, :]            # no-flux reflection 2nd ghost
+        cyR = c[:, ny-1:ny, :]
+    else:
+        cyL = c[:, ny-1:ny, :]       # periodic wrap
+        cyR = c[:, 2:3, :]
+    cy = torch.cat([cyL, c, cyR], dim=1)
+    sg   = _vanleer(cy[:, 1:ny+2, :] - cy[:, 0:ny+1, :], cy[:, 2:ny+3, :] - cy[:, 1:ny+2, :])
+    sgp1 = _vanleer(cy[:, 2:ny+3, :] - cy[:, 1:ny+2, :], cy[:, 3:ny+4, :] - cy[:, 2:ny+3, :])
+    Vf = v[:, 0:ny+1, :]
+    cfy = torch.where(Vf >= 0.0, cy[:, 1:ny+2, :] + 0.5 * sg, cy[:, 2:ny+3, :] - 0.5 * sgp1)
+    Fy = Vf * cfy
+    dvdy = (Fy[1:nx+1, 1:ny+1, 1:nz+1] - Fy[1:nx+1, 0:ny, 1:nz+1]) / dy
+
+    # ---------- z: walls (Neumann no-flux, or Dirichlet c=0) ----------
+    if wall_bc == 'dirichlet':
+        czL = -c[:, :, 2:3]
+        czR = -c[:, :, nz-1:nz]
+    else:
+        czL = c[:, :, 2:3]
+        czR = c[:, :, nz-1:nz]
+    cz = torch.cat([czL, c, czR], dim=2)
+    sh   = _vanleer(cz[:, :, 1:nz+2] - cz[:, :, 0:nz+1], cz[:, :, 2:nz+3] - cz[:, :, 1:nz+2])
+    shp1 = _vanleer(cz[:, :, 2:nz+3] - cz[:, :, 1:nz+2], cz[:, :, 3:nz+4] - cz[:, :, 2:nz+3])
+    Wf = w[:, :, 0:nz+1]
+    cfz = torch.where(Wf >= 0.0, cz[:, :, 1:nz+2] + 0.5 * sh, cz[:, :, 2:nz+3] - 0.5 * shp1)
+    Fz = Wf * cfz
+    dwdz = (Fz[1:nx+1, 1:ny+1, 1:nz+1] - Fz[1:nx+1, 1:ny+1, 0:nz]) / dz_f.view(1, 1, -1)
 
     adv[1:nx+1, 1:ny+1, 1:nz+1] = dudx + dvdy + dwdz
     return adv

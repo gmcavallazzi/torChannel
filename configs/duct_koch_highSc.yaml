@@ -1,0 +1,52 @@
+# Seam-free DUCT + single-interface Koch scalar at HIGH Schmidt number, using the
+# TVD (van Leer) flux-limited scalar advection so the fine fractal striations
+# survive without dispersive wiggles. Target Sc~10-20 first (finer grid than the
+# Sc=1 baseline). Use with the N-sweep driver to test L_mix(N)/L_mix(0) vs r^{-Df N}.
+grid:   {nx: 24, ny: 96, nz: 96}
+domain: {Lx: 3.1416, Ly: 1.0, Lz: 1.0, bc_y: wall}
+
+flow:
+  Re: 50.0
+  Re_tau: 10.0
+  U_bulk: 1.0
+  gamma: 1.2
+
+boundary_conditions:
+  top_wall: {type: "dirichlet"}
+
+initialization:
+  type: "parabolic"
+  perturbation_intensity: 0.0
+
+solver: {type: "fft"}
+
+time:
+  dt: 0.001
+  n_steps: 40000
+  t_max: 1000.0
+  CFL_target: 0.25
+  dt_update_interval: 0
+  dt_max: 0.01
+  dt_min: 0.0001
+  scheme: "IMEX"
+
+compute: {device: "cuda"}
+
+output:
+  results_folder: results/duct_koch_highSc
+  n_out: 200
+  n_save: 10000
+
+statistics: {enabled: false, n_stats: 0}
+
+# ---- passive scalar: high-Sc, TVD (flux-limited) advection -------------------
+scalar:
+  enabled: true
+  Sc: 16.0                  # high Schmidt (cell-Pe large -> needs TVD)
+  wall_bc: "neumann"
+  scheme: "tvd"             # van Leer limiter: monotone, no over/undershoot
+  init_type: "koch"
+  N: 0
+  r: 3.0
+  eps_cells: 1.0
+  theta: 0.5

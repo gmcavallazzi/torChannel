@@ -1,0 +1,53 @@
+# Seam-free DUCT (no-slip walls in y AND z) + single-interface Koch passive scalar.
+# This is the fair-test geometry for the MERGE fractal-mixing study: the spanwise
+# periodic seam is gone (walls in y), so the proposal's two-stream Koch interface
+# (init_type 'koch') is the correct IC and the variance metric is no longer
+# dominated by a spurious flat seam. Plain duct baseline (no folding flow), Sc=1.
+grid:   {nx: 24, ny: 48, nz: 48}
+domain: {Lx: 3.1416, Ly: 1.0, Lz: 1.0, bc_y: wall}   # bc_y: wall -> rectangular duct
+
+flow:
+  Re: 50.0
+  Re_tau: 10.0
+  U_bulk: 1.0
+  gamma: 1.2
+
+boundary_conditions:
+  top_wall: {type: "dirichlet"}     # no-slip top (all four duct walls no-slip)
+
+initialization:
+  type: "parabolic"
+  perturbation_intensity: 0.0
+
+solver: {type: "fft"}
+
+time:
+  dt: 0.002
+  n_steps: 20000
+  t_max: 1000.0
+  CFL_target: 0.25
+  dt_update_interval: 0
+  dt_max: 0.01
+  dt_min: 0.0001
+  scheme: "IMEX"
+
+compute: {device: "cuda"}
+
+output:
+  results_folder: results/duct_koch
+  n_out: 100
+  n_save: 5000
+
+statistics: {enabled: false, n_stats: 0}
+
+# ---- passive scalar: single-interface Koch (two co-flowing streams) ----------
+scalar:
+  enabled: true
+  Sc: 1.0
+  wall_bc: "neumann"        # no-flux scalar at z-walls (y-walls no-flux via bc_y)
+  scheme: "central"         # Sc=1 is clean with the central scheme
+  init_type: "koch"         # single Koch interface at y=Ly/2 (seam-free with y-walls)
+  N: 0                      # Koch generation (sweep 0/1/2 via the driver)
+  r: 3.0
+  eps_cells: 1.0
+  theta: 0.5
