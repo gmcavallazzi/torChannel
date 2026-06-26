@@ -375,15 +375,20 @@ IC. Phase 5 closes both gaps the proposal could complain about:
    (0.4%), circular pipe (volume-penalization immersed disc) u_max/u_bulk=1.983 vs
    Hagen-Poiseuille 2.000 (0.8%). Fluid divergence ~1e-12 throughout.
 2. **The actual fractal SURFACE, not a proxy.** New immersed kind `pipe_koch`: a circular
-   orifice whose WALL is azimuthally Koch-corrugated (generation N, area-balanced, unit-peak
-   normalised so the envelope amplitude is N-independent — "more scales, same envelope"),
-   localised at the INLET by a streamwise half-cosine envelope; downstream the pipe is the
-   smooth disc. NO obstacles — the wall itself is folded, exactly as the proposal's Fig. 1.
-   Combined with the Koch BAFFLE (scalar interface, gen N). Both scale together with N.
+   orifice whose WALL is a symmetric Koch-snowflake ring — the area-balanced Koch generator
+   (4 sub-segments each length 1/r, Df=log4/log3=1.262, verified: arclength grows as (4/3)^N)
+   tiled `n_lobes=6` times around the azimuth, unit-peak normalised so the envelope amplitude
+   is N-independent ("more scales, same envelope"), localised at the INLET by a streamwise
+   half-cosine envelope; downstream the pipe is the smooth disc. NO obstacles — the wall
+   itself is folded, as in the proposal's Fig. 1. Combined with the Koch BAFFLE (scalar
+   interface, gen N). Both scale together with N. (`scripts/check_fractal_wall.py` verifies
+   the border dimension; an earlier n_lobes=1 wrap gave a too-gentle asymmetric border and
+   was replaced by the 6-lobe symmetric ring.)
 
 **Run** (`scripts/run_pipe_koch_mixing.py`, Re=40, Sc=0.5, round duct Lx=10, R=0.42,
-corrugation 13% of R, inlet_len=1.0, N=0,1,2; fluid div verified 1.15e-12, the larger
-all-cell div=0.17 is solid-confined Brinkman slip and does NOT touch the fluid):
+corrugation 13% of R, n_lobes=6, inlet_len=1.0, grid 96x48x48, N=0,1,2; fluid div verified
+1.15e-12, the larger all-cell div=0.18 is solid-confined Brinkman slip and does NOT touch
+the fluid):
 
   The streamwise segregation M(x) curves for N=0, 1, 2 **collapse onto a single line**
   (mixing length identical to within line width; M→0.5 at x≈0.7 and M→0 by x≈4 for all N).

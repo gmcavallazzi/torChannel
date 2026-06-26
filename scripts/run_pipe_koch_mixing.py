@@ -34,7 +34,7 @@ BASE = dict(
     statistics={'enabled': False, 'n_stats': 0},
     immersed={'enabled': True, 'kind': 'pipe_koch', 'eta': 1.0e-4,
               'pipe_R': 0.42, 'pipe_yc': 0.5, 'pipe_zc': 0.5,
-              'N': 0, 'r': 3.0, 'koch_amp': 0.15, 'n_lobes': 1, 'inlet_len': 1.0},
+              'N': 0, 'r': 3.0, 'koch_amp': 0.15, 'n_lobes': 6, 'inlet_len': 1.0},
     scalar={'enabled': True, 'Sc': 0.5, 'wall_bc': 'neumann', 'scheme': 'central',
             'init_type': 'koch', 'N': 0, 'r': 3.0, 'eps_cells': 1.0, 'theta': 0.5})
 NSTEPS = 9000
@@ -95,9 +95,9 @@ def main():
   for N, lw in [(0, 1.8), (1, 1.8), (2, 1.8)]:
       axs[3].plot(xg, results[N][2], lw=lw, label=r"$N=%d$" % N)
   axs[3].set_xlabel(r"$x$"); axs[3].set_ylabel(r"segregation $M(x)$")
-  axs[3].set_title(r"Streamwise mixing (circular orifice)")
+  axs[3].set_title(r"Mixing $M(x)$")
   axs[3].grid(True, alpha=0.3); axs[3].legend()
-  axs[0].set_title(r"Fractal-wall + Koch-baffle $c(x,y)$ at mid-$z$ (round duct, inflow$\to$outflow)")
+  axs[0].set_title(r"Midplane $c(x,y)$")
   fig.tight_layout()
   os.makedirs("results/figures", exist_ok=True)
   fig.savefig("results/figures/pipe_koch_mixing.png", dpi=140, bbox_inches='tight')
