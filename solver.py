@@ -420,7 +420,13 @@ class ChannelFlow:
                     eps_cells=scalar_config.get('eps_cells', 1.0),
                     N=scalar_config.get('N', 0), r=scalar_config.get('r', 3.0),
                     device=self.device)
-            apply_scalar_bc(self.scalar, self.scalar_wall_bc, self.bc_y)
+            apply_scalar_bc(self.scalar, self.scalar_wall_bc, self.bc_y, self.bc_x)
+            # Inflow/outflow: the inlet plane carries the prescribed interface profile,
+            # injected every step (the "fractal inlet" condition). The volume IC is
+            # uniform in x, so any interior x-slice is the inlet cross-section.
+            if self.bc_x == 'inout':
+                self.c_inlet = self.scalar[1, :, :].clone()
+                self.scalar[0, :, :] = self.c_inlet
             s0 = scalar_stats(self.scalar, self.nx, self.ny, self.nz, self.dz_f)
             print(f"Passive scalar enabled: Sc={self.Sc}, D={self.scalar_D:.3e}, "
                   f"wall_bc={self.scalar_wall_bc}, init mean={s0['mean']:.4f}, "
@@ -909,6 +915,13 @@ class ChannelFlow:
 
         return u_bulk_current, self.forcing
 
+    def _apply_scalar_bc(self):
+        """Scalar ghost cells + (for inflow/outflow) re-impose the prescribed inlet
+        interface at x=0 each call."""
+        apply_scalar_bc(self.scalar, self.scalar_wall_bc, self.bc_y, self.bc_x)
+        if self.bc_x == 'inout':
+            self.scalar[0, :, :] = self.c_inlet
+
     def advance_scalar(self, dt):
         """One IMEX step of the passive scalar on the current velocity field.
 
@@ -917,12 +930,12 @@ class ChannelFlow:
         scalar is passive, so there is no projection.
         """
         D = self.scalar_D
-        apply_scalar_bc(self.scalar, self.scalar_wall_bc, self.bc_y)
+        self._apply_scalar_bc()
 
         if self.scalar_scheme == 'tvd':
             adv_c = advection_scalar_tvd(self.scalar, self.u, self.v, self.w,
                                          self.nx, self.ny, self.nz, self.dx, self.dy,
-                                         self.dz_f, self.bc_y, self.scalar_wall_bc)
+                                         self.dz_f, self.bc_y, self.scalar_wall_bc, self.bc_x)
         else:
             adv_c = advection_scalar(self.scalar, self.u, self.v, self.w,
                                      self.nx, self.ny, self.nz, self.dx, self.dy, self.dz_f)
@@ -936,11 +949,11 @@ class ChannelFlow:
             self.scalar = self.scalar + dt * (1.5 * rhs_c - 0.5 * self.rhs_c_prev)
         self.rhs_c_prev = rhs_c
 
-        apply_scalar_bc(self.scalar, self.scalar_wall_bc, self.bc_y)
+        self._apply_scalar_bc()
         self.scalar = solve_implicit_diffusion_scalar(
             self.scalar, float(dt), self.nx, self.ny, self.nz, self.dz_c, self.dz_f,
             D, theta=self.scalar_theta, wall_bc=self.scalar_wall_bc)
-        apply_scalar_bc(self.scalar, self.scalar_wall_bc, self.bc_y)
+        self._apply_scalar_bc()
 
     def step_rk3(self, dt):
         """

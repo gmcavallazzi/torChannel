@@ -33,12 +33,17 @@ from operators import solve_tridiagonal_batch
 # Boundary conditions
 # ---------------------------------------------------------------------------
 @torch.jit.script
-def apply_scalar_bc(c: torch.Tensor, wall_bc: str = 'neumann', bc_y: str = 'periodic') -> None:
-    """Fill ghost cells: periodic in x; periodic or no-flux walls in y (duct);
-    Neumann or Dirichlet(0) walls in z."""
-    # Periodic in x (cell-centred: ghosts at 0 and -1)
-    c[0, :, :] = c[-2, :, :]
-    c[-1, :, :] = c[1, :, :]
+def apply_scalar_bc(c: torch.Tensor, wall_bc: str = 'neumann', bc_y: str = 'periodic',
+                    bc_x: str = 'periodic') -> None:
+    """Fill ghost cells: periodic in x, or inflow/outflow ('inout', where the inlet
+    ghost c[0] is the prescribed inlet profile set separately and the outlet is
+    zero-gradient); periodic or no-flux walls in y (duct); Neumann/Dirichlet walls in z."""
+    # x: periodic, or inflow/outflow (inlet ghost c[0] set separately; outlet zero-grad)
+    if bc_x == 'periodic':
+        c[0, :, :] = c[-2, :, :]
+        c[-1, :, :] = c[1, :, :]
+    else:
+        c[-1, :, :] = c[-2, :, :]    # outflow: dc/dx = 0
     # y: periodic, or no-flux walls (duct)
     if bc_y == 'wall':
         c[:, 0, :] = c[:, 1, :]      # dc/dy = 0 at wall (no scalar flux through wall)
@@ -102,7 +107,8 @@ def _vanleer(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
 def advection_scalar_tvd(c: torch.Tensor, u: torch.Tensor, v: torch.Tensor,
                          w: torch.Tensor, nx: int, ny: int, nz: int,
                          dx: float, dy: float, dz_f: torch.Tensor,
-                         bc_y: str = 'periodic', wall_bc: str = 'neumann') -> torch.Tensor:
+                         bc_y: str = 'periodic', wall_bc: str = 'neumann',
+                         bc_x: str = 'periodic') -> torch.Tensor:
     """Conservative flux-form advection div(u c) with a van Leer flux limiter.
 
     Same conservative discretisation as `advection_scalar`, but each face value is a
@@ -116,8 +122,12 @@ def advection_scalar_tvd(c: torch.Tensor, u: torch.Tensor, v: torch.Tensor,
     """
     adv = torch.zeros_like(c)
 
-    # ---------- x: periodic (2nd ghosts = interior wrap cells) ----------
-    cx = torch.cat([c[nx-1:nx, :, :], c, c[2:3, :, :]], dim=0)   # logical cells -1..nx+2
+    # ---------- x: periodic, or inflow/outflow 2nd ghosts ----------
+    if bc_x == 'periodic':
+        cx = torch.cat([c[nx-1:nx, :, :], c, c[2:3, :, :]], dim=0)   # logical cells -1..nx+2
+    else:
+        # inlet: constant upstream state (= inlet ghost c[0]); outlet: zero-gradient
+        cx = torch.cat([c[0:1, :, :], c, c[nx+1:nx+2, :, :]], dim=0)
     sf   = _vanleer(cx[1:nx+2] - cx[0:nx+1], cx[2:nx+3] - cx[1:nx+2])   # slope at cell f
     sfp1 = _vanleer(cx[2:nx+3] - cx[1:nx+2], cx[3:nx+4] - cx[2:nx+3])   # slope at cell f+1
     Uf = u[0:nx+1, :, :]
