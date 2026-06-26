@@ -16,7 +16,7 @@ plt.rcParams.update({"text.usetex": usetex, "font.family": "serif", "font.size":
 CFG = "configs/herringbone_duct_strong.yaml"
 base = yaml.safe_load(open(CFG))
 base['compute']['device'] = 'cuda' if torch.cuda.is_available() else 'cpu'
-times = [0.0, 4.0, 12.0, 29.0]
+times = [0.0, 1.0, 4.0, 12.0, 29.0]
 
 def run(N):
     c = copy.deepcopy(base); c['scalar']['N'] = N
