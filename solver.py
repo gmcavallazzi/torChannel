@@ -26,7 +26,7 @@ if os.environ.get("TORCHANNEL_COMPILE", "0") == "1":
 
 
 @torch.jit.script
-def apply_bc_all(u: torch.Tensor, v: torch.Tensor, w: torch.Tensor, top_wall_bc_type: str = 'dirichlet', bc_y: str = 'periodic') -> None:
+def apply_bc_all(u: torch.Tensor, v: torch.Tensor, w: torch.Tensor, top_wall_bc_type: str = 'dirichlet', bc_y: str = 'periodic', bc_x: str = 'periodic') -> None:
     """
     Apply boundary conditions to all velocity components in a single fused kernel.
     This reduces 3 separate kernel launches to 1, improving GPU performance.
@@ -45,12 +45,13 @@ def apply_bc_all(u: torch.Tensor, v: torch.Tensor, w: torch.Tensor, top_wall_bc_
         w: Wall-normal velocity (staggered in z)
         top_wall_bc_type: 'dirichlet' (no-slip) or 'neumann' (free-slip)
     """
-    # ---- x-direction: periodic (always) ----
-    u[0, :, :] = u[-1, :, :]    # u staggered in x (shape nx+1)
-    v[0, :, :] = v[-2, :, :]    # v NOT staggered in x
-    v[-1, :, :] = v[1, :, :]
-    w[0, :, :] = w[-2, :, :]    # w NOT staggered in x
-    w[-1, :, :] = w[1, :, :]
+    # ---- x-direction: periodic, or inflow/outflow (set separately, see _apply_inout_x) ----
+    if bc_x == 'periodic':
+        u[0, :, :] = u[-1, :, :]    # u staggered in x (shape nx+1)
+        v[0, :, :] = v[-2, :, :]    # v NOT staggered in x
+        v[-1, :, :] = v[1, :, :]
+        w[0, :, :] = w[-2, :, :]    # w NOT staggered in x
+        w[-1, :, :] = w[1, :, :]
 
     # ---- y-direction: periodic, or no-slip walls (duct) ----
     if bc_y == 'wall':
@@ -359,6 +360,40 @@ class ChannelFlow:
         else:
             self.chi_u = self.chi_v = self.chi_w = self.chi_c = None
 
+        # ---- Inflow/outflow streamwise BC setup (bc_x='inout') ----------
+        if self.bc_x == 'inout':
+            self.forcing = 0.0   # flow is driven by the inlet, not a body force
+            dev = self.device
+            ny, nz = self.ny, self.nz
+            yc = (torch.arange(ny + 2, device=dev, dtype=torch.float64) - 0.5) * self.dy
+            zc = self.z_c.to(dev)
+            # smooth duct-like inlet profile: parabola in y and z, no-slip at the walls
+            prof = torch.zeros(ny + 2, nz + 2, device=dev, dtype=torch.float64)
+            Pyi = 4.0 * yc[1:ny+1] * (self.Ly - yc[1:ny+1]) / self.Ly**2
+            Pzi = 4.0 * zc[1:nz+1] * (self.Lz - zc[1:nz+1]) / self.Lz**2
+            prof[1:ny+1, 1:nz+1] = Pyi.view(-1, 1) * Pzi.view(1, -1)
+            if self.immersed_enabled:
+                prof[1:ny+1, 1:nz+1] *= (1.0 - self.chi_u[0, 1:ny+1, 1:nz+1])  # no inflow into solid
+            # fluid-area weight at the outflow face (for the mass-flux correction)
+            wA = (self.dy * self.dz_f).view(1, -1)             # (1, nz)
+            fl = torch.ones(ny, nz, device=dev, dtype=torch.float64)
+            if self.immersed_enabled:
+                fl = 1.0 - self.chi_u[self.nx, 1:ny+1, 1:nz+1]
+            self._inout_fluid_area_w = wA * fl                 # (ny, nz)
+            # normalise so the fluid-area-mean inlet velocity equals U_bulk
+            mean = (prof[1:ny+1, 1:nz+1] * self._inout_fluid_area_w).sum() / self._inout_fluid_area_w.sum()
+            prof = prof * (self.U_bulk / mean)
+            # no-slip y,z ghosts for the inlet plane
+            prof[0, :] = -prof[1, :]; prof[ny+1, :] = -prof[ny, :]
+            prof[:, 0] = -prof[:, 1]; prof[:, nz+1] = -prof[:, nz]
+            self.u_inflow = prof
+            # start from the inlet profile extended downstream (uniform in x); v=w=0
+            self.u[:] = prof.unsqueeze(0)
+            self.v.zero_(); self.w.zero_()
+            self.apply_bc_uvw()
+            print(f"Inflow/outflow (bc_x=inout): inlet profile set, "
+                  f"max u_in={float(self.u_inflow[1:ny+1, 1:nz+1].max()):.3f}", flush=True)
+
         # ---- Passive scalar (optional) ----------------------------------
         scalar_config = config.get('scalar', {})
         self.scalar_enabled = scalar_config.get('enabled', False)
@@ -570,9 +605,40 @@ class ChannelFlow:
         self.w[:, :, 0] = 0.0
         self.w[:, :, -1] = 0.0
 
-    def apply_bc_uvw(self):
+    def apply_bc_uvw(self, post_project=False):
         """Apply boundary conditions to all velocity components (optimized fused kernel)"""
-        apply_bc_all(self.u, self.v, self.w, self.top_wall_bc_type, self.bc_y)
+        apply_bc_all(self.u, self.v, self.w, self.top_wall_bc_type, self.bc_y, self.bc_x)
+        if self.bc_x == 'inout':
+            self._apply_inout_x(set_u_outflow=not post_project)
+
+    def _apply_inout_x(self, set_u_outflow=True):
+        """Streamwise inflow/outflow BCs (bc_x='inout').
+
+        Inflow (x=0): prescribe the streamwise velocity profile u[0]=u_inflow; the
+        transverse velocities vanish at the inlet plane (reflection ghost). Outflow
+        (x=Lx): zero-gradient (Neumann) on u,v,w, then a uniform mass-flux correction
+        on the outflow face so that integral(u_out) = integral(u_in). The latter is the
+        compatibility condition that keeps the all-Neumann pressure Poisson consistent.
+        """
+        nx, ny, nz = self.nx, self.ny, self.nz
+        # inflow plane x=0
+        self.u[0, :, :] = self.u_inflow
+        self.v[0, :, :] = -self.v[1, :, :]
+        self.w[0, :, :] = -self.w[1, :, :]
+        # outflow plane x=Lx: zero-gradient on v,w (cell-centred ghosts; do not affect
+        # the divergence). The outflow u-face is set only in the predictor (before the
+        # projection); after projection it is left as the projection produced it (the
+        # field is then divergence-free and Neumann pressure means dp/dx=0 there, so
+        # re-imposing zero-gradient would re-introduce divergence at the outflow cell).
+        self.v[nx + 1, :, :] = self.v[nx, :, :]
+        self.w[nx + 1, :, :] = self.w[nx, :, :]
+        if set_u_outflow:
+            self.u[nx, :, :] = self.u[nx - 1, :, :]          # zero-gradient outflow u
+            # global mass-flux correction so integral(u_out) = integral(u_in)
+            afl = self._inout_fluid_area_w                   # (ny, nz) fluid mask * area
+            Qin = (self.u[0, 1:ny + 1, 1:nz + 1] * afl).sum()
+            Qout = (self.u[nx, 1:ny + 1, 1:nz + 1] * afl).sum()
+            self.u[nx, 1:ny + 1, 1:nz + 1] += (Qin - Qout) / afl.sum() * (afl > 0)
 
     def compute_cfl_dt(self):
         """
@@ -821,24 +887,21 @@ class ChannelFlow:
                                                    self.nx, self.ny, self.nz,
                                                    self.dx, self.dy, self.dz_c, self.dz_f, dt_t)
 
-        # Reapply boundary conditions after projection
-        self.apply_bc_uvw()  # Fused boundary conditions
+        # Reapply boundary conditions after projection (for inflow/outflow, do NOT
+        # re-impose the outflow u-face — see _apply_inout_x).
+        self.apply_bc_uvw(post_project=True)
 
-        # Update Bulk Forcing (Lagged, matches .susa)
-        # Calculate u_bulk using the NEW velocity (at end of step). With an
-        # immersed solid present, average over FLUID cells only (interstitial
-        # mean) so the controller is not biased by the zero-velocity solid.
+        # Bulk velocity of the NEW field (FLUID cells only when an immersed solid is
+        # present, so the mean is not biased by the zero-velocity solid).
         if self.immersed_enabled:
             u_bulk_current = compute_bulk_velocity(self.u, self.fluid_vol, self.fluid_volume)
         else:
             u_bulk_current = compute_bulk_velocity(self.u, self.cell_vol_ratio, self.total_volume)
-        
-        # Update forcing for NEXT step (PI Controller)
-        # .susa uses damp=10.0 with Crank-Nicholson. We use a relaxation factor.
-        # forcing += (target - current) / timescale
-        # We want to correct the error over ~10 time steps to be stable.
-        relaxation = 0.1
-        self.forcing += (self.U_bulk - u_bulk_current) / dt * relaxation
+        # Update bulk forcing (PI controller). Skipped for inflow/outflow, where the
+        # flow is driven by the prescribed inlet rather than a body force.
+        if self.bc_x != 'inout':
+            relaxation = 0.1
+            self.forcing += (self.U_bulk - u_bulk_current) / dt * relaxation
 
         # Advance the passive scalar on the now divergence-free velocity field.
         if self.scalar_enabled:
