@@ -1,7 +1,7 @@
 import torch
 
 def initialize_fft_solver(nx, ny, nz, dx, dy, dz_c, dz_f, top_wall_bc_type='dirichlet',
-                          bc_y='periodic'):
+                          bc_y='periodic', bc_x='periodic'):
     """
     Precompute wavenumbers and tridiagonal matrices for FFT-based Poisson solver.
     Returns a dictionary with precomputed data.
@@ -31,10 +31,25 @@ def initialize_fft_solver(nx, ny, nz, dx, dy, dz_c, dz_f, top_wall_bc_type='diri
     """
     device = dz_c.device
 
-    kx = torch.fft.fftfreq(nx, d=dx/(2*torch.pi), device=device)
-    # Use MODIFIED wavenumbers to match central finite difference scheme
-    kx_mod = (2.0 / dx) * torch.sin(kx * dx / 2.0)
-    nkx = len(kx)
+    # Streamwise (x) eigenbasis: FFT (periodic) or DCT-II (non-periodic, e.g. inflow/
+    # outflow with Neumann pressure). x is uniform, so a cosine transform decouples
+    # into the same tridiagonal-in-z solves — identical machinery to the duct y-walls.
+    Mx = None
+    Mx_inv = None
+    if bc_x == 'wall':
+        k_idx = torch.arange(nx, device=device, dtype=dz_c.dtype)
+        kx_mod = (2.0 / dx) * torch.sin(torch.pi * k_idx / (2.0 * nx))
+        nkx = nx
+        n_idx = (torch.arange(nx, device=device, dtype=dz_c.dtype) + 0.5).view(1, nx)
+        M = torch.cos(torch.pi * n_idx * k_idx.view(nx, 1) / nx)   # (nx, nx)
+        Mx = M.to(torch.complex128)
+        Mx_inv = torch.linalg.inv(M).to(torch.complex128)
+    elif bc_x == 'periodic':
+        kx = torch.fft.fftfreq(nx, d=dx/(2*torch.pi), device=device)
+        kx_mod = (2.0 / dx) * torch.sin(kx * dx / 2.0)
+        nkx = len(kx)
+    else:
+        raise ValueError(f"unknown bc_x {bc_x!r} (expected 'periodic' or 'wall')")
 
     # Spanwise (y) eigenbasis: FFT (periodic) or DCT-II (no-slip walls / duct).
     My = None
@@ -58,6 +73,10 @@ def initialize_fft_solver(nx, ny, nz, dx, dy, dz_c, dz_f, top_wall_bc_type='diri
         nky = len(ky)  # This is ny//2 + 1
     else:
         raise ValueError(f"unknown bc_y {bc_y!r} (expected 'periodic' or 'wall')")
+
+    if bc_x == 'wall' and bc_y != 'wall':
+        raise NotImplementedError(
+            "bc_x='wall' (inflow/outflow) currently requires bc_y='wall' (a duct)")
 
     # Vectorized: Create meshgrid of wavenumbers
     # Shape: (nkx, nky)
@@ -107,12 +126,20 @@ def initialize_fft_solver(nx, ny, nz, dx, dy, dz_c, dz_f, top_wall_bc_type='diri
     # at the boundary cell because the boundary velocity is fixed.
     tri_b[:, :, -1] += coeff_right[-1]
 
+    # Pin the singular (kx=0, ky=0) pressure mode. With Neumann pressure in every
+    # direction this mode has a constant nullspace, so its z-tridiagonal is singular
+    # (the batched Thomas solve would divide by ~0). Fix the gauge by pinning p=0 at
+    # z=0 for that mode (row 0 -> identity); the RHS entry is zeroed in the solve.
+    # The velocity projection uses only grad(p), so fixing this constant changes nothing.
+    tri_a[0, 0, 0] = 0.0
+    tri_b[0, 0, 0] = 1.0
+    tri_c[0, 0, 0] = 0.0
+
     # Pre-allocate workspace for pressure field (GPU optimization)
     # Reusing this workspace avoids repeated allocations every timestep
     workspace_p = torch.zeros(nx+2, ny+2, nz+2, device=device)
 
     return {
-        'kx': kx,
         'tri_a': tri_a,
         'tri_b': tri_b,
         'tri_c': tri_c,
@@ -124,6 +151,9 @@ def initialize_fft_solver(nx, ny, nz, dx, dy, dz_c, dz_f, top_wall_bc_type='diri
         'bc_y': bc_y,
         'My': My,           # DCT-II forward matrix (complex), None if periodic
         'My_inv': My_inv,   # DCT-II inverse matrix (complex), None if periodic
+        'bc_x': bc_x,
+        'Mx': Mx,           # DCT-II forward matrix in x (complex), None if periodic
+        'Mx_inv': Mx_inv,
     }
 
 def solve_poisson_fft(div, fft_data):
@@ -141,66 +171,63 @@ def solve_poisson_fft(div, fft_data):
     tri_b = fft_data['tri_b']
     tri_c = fft_data['tri_c']
     bc_y = fft_data['bc_y']
+    bc_x = fft_data.get('bc_x', 'periodic')
 
-    if bc_y == 'wall':
-        # FFT in x (periodic), DCT-II in y (no-slip walls) via the precomputed cosine
-        # matrix. The y-Laplacian is diagonal in this basis, so each (kx, ky) mode is
-        # the same independent tridiagonal-in-z system as the periodic solver.
-        My = fft_data['My']
-        My_inv = fft_data['My_inv']
+    # ---- forward transforms (x then y; FFT if periodic, DCT-II matrix if wall) ----
+    if bc_x == 'wall':
+        # inflow/outflow: Neumann pressure in x via DCT-II. Implemented for a duct
+        # (bc_y == 'wall'), so x AND y are cosine transforms + tridiagonal in z.
+        Mx = fft_data['Mx']; Mx_inv = fft_data['Mx_inv']
+        My = fft_data['My']; My_inv = fft_data['My_inv']
+        Xx = torch.einsum('kn,nij->kij', Mx, div.to(torch.complex128))  # DCT-II in x
+        div_hat = torch.einsum('km,imj->ikj', My, Xx)                   # DCT-II in y
+        nky = ny
+    elif bc_y == 'wall':
+        My = fft_data['My']; My_inv = fft_data['My_inv']
         Xk = torch.fft.fft(div, dim=0)                       # (nx, ny, nz) complex
         div_hat = torch.einsum('kn,inz->ikz', My, Xk)        # DCT-II along y
         nky = ny
     else:
-        # FFT in x and y directions; rfft2 on dim=(0,1): real input, complex output.
         div_hat = torch.fft.rfft2(div, dim=(0, 1))           # (nx, ny//2+1, nz)
         nky = div_hat.shape[1]
 
     nkx = div_hat.shape[0]
 
-    # Flatten batch dimensions to vectorize the tridiagonal solve: (nkx*nky, nz)
-    div_hat_flat = div_hat.reshape(-1, nz)
-    tri_a_flat = tri_a.reshape(-1, nz)
-    tri_b_flat = tri_b.reshape(-1, nz)
-    tri_c_flat = tri_c.reshape(-1, nz)
+    # Zero the RHS of the pinned (kx=0, ky=0, z=0) gauge row (see initialize).
+    div_hat[0, 0, 0] = 0.0
 
-    # Solve all tridiagonal systems in parallel
-    p_hat_flat = solve_tridiagonal(tri_a_flat, tri_b_flat, tri_c_flat, div_hat_flat)
-
-    # Reshape back to (nkx, nky, nz)
+    # ---- tridiagonal solve in z (one per (kx, ky) mode) ----
+    p_hat_flat = solve_tridiagonal(tri_a.reshape(-1, nz), tri_b.reshape(-1, nz),
+                                   tri_c.reshape(-1, nz), div_hat.reshape(-1, nz))
     p_hat = p_hat_flat.reshape(nkx, nky, nz)
 
-    # Inverse transform to get pressure in physical space
-    if bc_y == 'wall':
-        p_y = torch.einsum('nk,ikz->inz', My_inv, p_hat)     # inverse DCT-II along y
-        p_interior = torch.fft.ifft(p_y, dim=0).real         # (nx, ny, nz) real
+    # ---- inverse transforms (y then x) ----
+    if bc_x == 'wall':
+        p_y = torch.einsum('mk,ikj->imj', My_inv, p_hat)               # inverse DCT-II in y
+        p_interior = torch.einsum('nk,kij->nij', Mx_inv, p_y).real     # inverse DCT-II in x
+    elif bc_y == 'wall':
+        p_y = torch.einsum('nk,ikz->inz', My_inv, p_hat)
+        p_interior = torch.fft.ifft(p_y, dim=0).real
     else:
-        # PyTorch FFTs are normalized by default (irfft2(rfft2(x)) == x)
         p_interior = torch.fft.irfft2(p_hat, s=(nx, ny), dim=(0, 1))
 
-    # Use preallocated workspace (GPU optimization - avoids allocations every timestep)
     p = fft_data['workspace_p']
-    p.zero_()  # CRITICAL: Clear workspace before reuse to avoid contamination
-
-    # Fill interior
+    p.zero_()
     p[1:nx+1, 1:ny+1, 1:nz+1] = p_interior
 
-    # Periodic BC in x (plain slices, not list-fancy-indexing: the latter builds
-    # host index tensors, which break CUDA-graph capture of this solve).
-    p[0] = p[nx]
-    p[nx+1] = p[1]
-
-    # BC in y
-    if bc_y == 'wall':
-        # Neumann pressure at no-slip walls (∂p/∂y = 0)
-        p[:, 0] = p[:, 1]
-        p[:, ny+1] = p[:, ny]
+    # x ghosts: Neumann (inflow/outflow) or periodic
+    if bc_x == 'wall':
+        p[0] = p[1]; p[nx+1] = p[nx]
     else:
-        # Periodic
-        p[:, 0] = p[:, ny]
-        p[:, ny+1] = p[:, 1]
+        p[0] = p[nx]; p[nx+1] = p[1]
 
-    # Pressure BC in z-direction: Neumann at both rigid walls (∂p/∂z = 0)
+    # y ghosts
+    if bc_y == 'wall':
+        p[:, 0] = p[:, 1]; p[:, ny+1] = p[:, ny]
+    else:
+        p[:, 0] = p[:, ny]; p[:, ny+1] = p[:, 1]
+
+    # z ghosts: Neumann at both rigid walls
     p[:, :, 0] = p[:, :, 1]
     p[:, :, nz+1] = p[:, :, nz]
 
