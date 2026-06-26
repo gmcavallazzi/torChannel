@@ -16,6 +16,30 @@ Velocities are staggered:
 """
 
 @torch.jit.script
+def _d2u_dx2_raw(u: torch.Tensor, nx: int, ny: int, nz: int,
+                 bc_x: str = 'periodic') -> torch.Tensor:
+    """Raw 2nd x-difference of u over [1:nx+1, 1:ny+1, 1:nz+1] (multiply by 1/dx**2 at
+    the call site). u is staggered in x (faces 0..nx).
+
+    - 'periodic' (default): wrap face 0<->nx — numerically identical to the prior
+      inlined `torch.cat([u, u[1:2, :, :]], dim=0)` stencil.
+    - otherwise (inflow/outflow): faces 0 (inflow) and nx (outflow) are prescribed BCs;
+      only interior faces 1..nx-1 get a real stencil (using the boundary faces), and the
+      outflow face nx is left 0 here (it is set by the velocity BC each substep).
+    """
+    if bc_x == 'periodic':
+        u_ext_x = torch.cat([u, u[1:2, :, :]], dim=0)
+        return (u_ext_x[2:nx+2, 1:ny+1, 1:nz+1]
+                - 2.0 * u_ext_x[1:nx+1, 1:ny+1, 1:nz+1]
+                + u_ext_x[0:nx, 1:ny+1, 1:nz+1])
+    else:
+        out = torch.zeros_like(u[1:nx+1, 1:ny+1, 1:nz+1])
+        out[0:nx-1, :, :] = (u[2:nx+1, 1:ny+1, 1:nz+1]
+                             - 2.0 * u[1:nx, 1:ny+1, 1:nz+1]
+                             + u[0:nx-1, 1:ny+1, 1:nz+1])
+        return out
+
+@torch.jit.script
 def _d2v_dy2_raw(v: torch.Tensor, nx: int, ny: int, nz: int,
                  bc_y: str = 'periodic') -> torch.Tensor:
     """Raw 2nd y-difference of v over the interior slice [1:nx+1, 1:ny+1, 1:nz+1]
@@ -42,18 +66,14 @@ def _d2v_dy2_raw(v: torch.Tensor, nx: int, ny: int, nz: int,
 @torch.jit.script
 def diffusion_u(u: torch.Tensor, nx: int, ny: int, nz: int,
                 dx: float, dy: float, dz_c: torch.Tensor, dz_f: torch.Tensor,
-                nu: float) -> torch.Tensor:
+                nu: float, bc_x: str = 'periodic') -> torch.Tensor:
     """Compute diffusion term for u-component: nu * laplacian(u). JIT-compiled."""
     diff_u = torch.zeros_like(u)
 
     # Second derivative in x (uniform spacing, periodic)
     # u is staggered in x, indices 0..nx. u[0]=u[nx].
-    # Construct extended u in x: [u[0]...u[nx], u[1]]
-    u_ext_x = torch.cat([u, u[1:2, :, :]], dim=0)
-    
-    d2u_dx2 = (u_ext_x[2:nx+2, 1:ny+1, 1:nz+1] -
-               2*u_ext_x[1:nx+1, 1:ny+1, 1:nz+1] +
-               u_ext_x[0:nx, 1:ny+1, 1:nz+1]) / dx**2
+    # (periodic or inflow/outflow)
+    d2u_dx2 = _d2u_dx2_raw(u, nx, ny, nz, bc_x) / dx**2
 
     # Second derivative in y (uniform spacing)
     # u is NOT staggered in y. Indices 0..ny+1. Ghosts at 0, ny+1.
@@ -293,7 +313,7 @@ def compute_momentum_rhs_fused(
     nx: int, ny: int, nz: int,
     dx: float, dy: float, 
     dz_c: torch.Tensor, dz_f: torch.Tensor,
-    nu: float, bc_y: str = 'periodic'
+    nu: float, bc_y: str = 'periodic', bc_x: str = 'periodic'
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Compute momentum RHS combining advection + diffusion in single pass.
@@ -344,10 +364,7 @@ def compute_momentum_rhs_fused(
 
     # --- Diffusion term for u: nu * laplacian(u) ---
     # d2u/dx2
-    u_ext_x = torch.cat([u, u[1:2, :, :]], dim=0)
-    d2u_dx2 = (u_ext_x[2:nx+2, 1:ny+1, 1:nz+1] -
-               2*u_ext_x[1:nx+1, 1:ny+1, 1:nz+1] +
-               u_ext_x[0:nx, 1:ny+1, 1:nz+1]) / (dx**2)
+    d2u_dx2 = _d2u_dx2_raw(u, nx, ny, nz, bc_x) / (dx**2)
 
     # d2u/dy2
     d2u_dy2 = (u[1:nx+1, 2:ny+2, 1:nz+1] -
@@ -488,7 +505,7 @@ def compute_momentum_rhs_fused(
 
 @torch.jit.script
 def diffusion_xy_u(u: torch.Tensor, nx: int, ny: int, nz: int,
-                   dx: float, dy: float, nu: float) -> torch.Tensor:
+                   dx: float, dy: float, nu: float, bc_x: str = 'periodic') -> torch.Tensor:
     """
     Compute explicit diffusion terms for u-component in x and y directions only.
     Used in IMEX scheme where z-diffusion is treated implicitly.
@@ -496,11 +513,8 @@ def diffusion_xy_u(u: torch.Tensor, nx: int, ny: int, nz: int,
     """
     diff_u = torch.zeros_like(u)
 
-    # Second derivative in x (uniform spacing, periodic)
-    u_ext_x = torch.cat([u, u[1:2, :, :]], dim=0)
-    d2u_dx2 = (u_ext_x[2:nx+2, 1:ny+1, 1:nz+1] -
-               2*u_ext_x[1:nx+1, 1:ny+1, 1:nz+1] +
-               u_ext_x[0:nx, 1:ny+1, 1:nz+1]) / dx**2
+    # Second derivative in x (uniform spacing); periodic or inflow/outflow
+    d2u_dx2 = _d2u_dx2_raw(u, nx, ny, nz, bc_x) / dx**2
 
     # Second derivative in y (uniform spacing)
     d2u_dy2 = (u[1:nx+1, 2:ny+2, 1:nz+1] -
@@ -833,7 +847,7 @@ def compute_momentum_rhs_fused_v2(
     nx: int, ny: int, nz: int,
     dx: float, dy: float,
     dz_c: torch.Tensor, dz_f: torch.Tensor,
-    nu: float, bc_y: str = 'periodic'
+    nu: float, bc_y: str = 'periodic', bc_x: str = 'periodic'
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Enhanced fused kernel for AB2 scheme: advection + full 3D diffusion.
@@ -903,11 +917,8 @@ def compute_momentum_rhs_fused_v2(
     # --- DIFFUSION: nu * laplacian(u) ---
     # Computed on [1:nx+1, 1:ny+1, 1:nz+1] then extract [0:nx-1, :, :]
 
-    # d2u/dx2 - periodic
-    u_ext_x = torch.cat([u, u[1:2, :, :]], dim=0)
-    d2u_dx2 = (u_ext_x[2:nx+2, 1:ny+1, 1:nz+1] -
-               2.0 * u_ext_x[1:nx+1, 1:ny+1, 1:nz+1] +
-               u_ext_x[0:nx, 1:ny+1, 1:nz+1]) * nu_dx2
+    # d2u/dx2 - periodic or inflow/outflow
+    d2u_dx2 = _d2u_dx2_raw(u, nx, ny, nz, bc_x) * nu_dx2
 
     # d2u/dy2
     d2u_dy2 = (u[1:nx+1, 2:ny+2, 1:nz+1] -
@@ -1049,7 +1060,7 @@ def compute_momentum_rhs_fused_imex(
     nx: int, ny: int, nz: int,
     dx: float, dy: float,
     dz_c: torch.Tensor, dz_f: torch.Tensor,
-    nu: float, bc_y: str = 'periodic'
+    nu: float, bc_y: str = 'periodic', bc_x: str = 'periodic'
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Fused kernel for IMEX scheme: advection + XY-diffusion only.
@@ -1114,11 +1125,8 @@ def compute_momentum_rhs_fused_imex(
 
     # --- XY-DIFFUSION ONLY (no Z-diffusion) ---
 
-    # d2u/dx2 - periodic
-    u_ext_x = torch.cat([u, u[1:2, :, :]], dim=0)
-    d2u_dx2 = (u_ext_x[2:nx+2, 1:ny+1, 1:nz+1] -
-               2.0 * u_ext_x[1:nx+1, 1:ny+1, 1:nz+1] +
-               u_ext_x[0:nx, 1:ny+1, 1:nz+1]) * nu_dx2
+    # d2u/dx2 - periodic or inflow/outflow
+    d2u_dx2 = _d2u_dx2_raw(u, nx, ny, nz, bc_x) * nu_dx2
 
     # d2u/dy2
     d2u_dy2 = (u[1:nx+1, 2:ny+2, 1:nz+1] -

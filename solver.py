@@ -127,6 +127,14 @@ class ChannelFlow:
         if self.bc_y not in ['periodic', 'wall']:
             raise ValueError(f"Invalid domain.bc_y: {self.bc_y}. Must be 'periodic' or 'wall'")
 
+        # Streamwise (x) boundary condition: 'periodic' (default) or 'inout'
+        # (inflow at x=0 / convective outflow at x=Lx -> a developing channel/duct).
+        self.bc_x = config['domain'].get('bc_x', 'periodic')
+        if self.bc_x not in ['periodic', 'inout']:
+            raise ValueError(f"Invalid domain.bc_x: {self.bc_x}. Must be 'periodic' or 'inout'")
+        if self.bc_x == 'inout' and self.bc_y != 'wall':
+            raise ValueError("domain.bc_x='inout' currently requires domain.bc_y='wall' (a duct)")
+
         # Validate stretching type
         if self.stretching_type not in ['symmetric', 'bottom', 'hybrid']:
             raise ValueError(f"Invalid stretching type: {self.stretching_type}. Must be 'symmetric', 'bottom', or 'hybrid'")
@@ -301,7 +309,8 @@ class ChannelFlow:
             self.fft_data = initialize_fft_solver(self.nx, self.ny, self.nz,
                                                     self.dx, self.dy, self.dz_c, self.dz_f,
                                                     top_wall_bc_type=self.top_wall_bc_type,
-                                                    bc_y=self.bc_y)
+                                                    bc_y=self.bc_y,
+                                                    bc_x=('wall' if self.bc_x == 'inout' else 'periodic'))
         else:
             raise ValueError(f"Unknown solver type: {self.solver_type}")
 
@@ -612,7 +621,7 @@ class ChannelFlow:
                 self.u, self.v, self.w,
                 self.nx, self.ny, self.nz,
                 self.dx, self.dy, self.dz_c, self.dz_f,
-                self.nu, self.bc_y
+                self.nu, self.bc_y, self.bc_x
             )
         else:
             # Original separate kernels (CPU fallback or if fused not available)
@@ -623,8 +632,8 @@ class ChannelFlow:
             adv_w = advection_w(self.u, self.v, self.w, self.nx, self.ny, self.nz, 
                                self.dx, self.dy, self.dz_c)
             
-            diff_u = diffusion_u(self.u, self.nx, self.ny, self.nz, 
-                                self.dx, self.dy, self.dz_c, self.dz_f, self.nu)
+            diff_u = diffusion_u(self.u, self.nx, self.ny, self.nz,
+                                self.dx, self.dy, self.dz_c, self.dz_f, self.nu, self.bc_x)
             diff_v = diffusion_v(self.v, self.nx, self.ny, self.nz,
                                 self.dx, self.dy, self.dz_c, self.dz_f, self.nu, self.bc_y)
             diff_w = diffusion_w(self.w, self.nx, self.ny, self.nz, 
@@ -708,7 +717,7 @@ class ChannelFlow:
                 self.u, self.v, self.w,
                 self.nx, self.ny, self.nz,
                 self.dx, self.dy, self.dz_c, self.dz_f,
-                self.nu, self.bc_y
+                self.nu, self.bc_y, self.bc_x
             )
         else:
             # Original separate kernels (CPU fallback or debugging)
@@ -722,7 +731,7 @@ class ChannelFlow:
 
             # Compute explicit diffusion in x and y only
             diff_xy_u = diffusion_xy_u(self.u, self.nx, self.ny, self.nz,
-                                       self.dx, self.dy, self.nu)
+                                       self.dx, self.dy, self.nu, self.bc_x)
             diff_xy_v = diffusion_xy_v(self.v, self.nx, self.ny, self.nz,
                                        self.dx, self.dy, self.nu, self.bc_y)
             diff_xy_w = diffusion_xy_w(self.w, self.nx, self.ny, self.nz,
