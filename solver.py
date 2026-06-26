@@ -342,6 +342,10 @@ class ChannelFlow:
                 # koch_herringbone (fractal inlet-surface proxy): wall Koch generation
                 N=ib_config.get('N', 0), r=ib_config.get('r', 3.0),
                 koch_amp=ib_config.get('koch_amp', 1.0),
+                # pipe (circular cross-section): inscribed disc by default
+                pipe_R=ib_config.get('pipe_R', 0.5 * min(self.Ly, self.Lz)),
+                pipe_yc=ib_config.get('pipe_yc', 0.5 * self.Ly),
+                pipe_zc=ib_config.get('pipe_zc', 0.5 * self.Lz),
             )
             self.ib_masks = build_masks(self.nx, self.ny, self.nz,
                                         self.Lx, self.Ly, self.Lz,

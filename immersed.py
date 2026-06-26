@@ -79,7 +79,7 @@ def _koch_zigzag_disp(N, r, y_norm):
 
 def height_field(x, y, kind='slab', z1=0.2, h0=0.2, A=0.1, kx=1.0, ky=1.0,
                  Lx=1.0, Ly=1.0, n_waves_x=2, n_waves_y=1,
-                 apex_frac=0.5, stagger=True, N=0, r=3.0, koch_amp=1.0):
+                 apex_frac=0.5, stagger=True, N=0, r=3.0, koch_amp=1.0, **kwargs):
     """Solid-region height h(x, y); a point is solid where its z < h(x, y).
 
     x, y are broadcast together (e.g. meshgrid). For 'grooves', kx, ky are
@@ -147,11 +147,24 @@ def build_masks(nx, ny, nz, Lx, Ly, Lz, z_c, z_f, device='cpu', **hf):
     """
     xc, xf, yc, yf, zc, zf = _coords(nx, ny, nz, Lx, Ly, z_c, z_f, device)
 
-    def mask(xv, yv, zv):
-        # h on the (x, y) plane of this location, then compare to z (broadcast).
-        X, Y = torch.meshgrid(xv, yv, indexing='ij')          # (Nx, Ny)
-        H = height_field(X, Y, Lx=Lx, Ly=Ly, **hf)            # (Nx, Ny)
-        return (zv.view(1, 1, -1) < H.unsqueeze(-1)).to(torch.float64)
+    if hf.get('kind', 'slab') == 'pipe':
+        # Circular cross-section (pipe): fill the corners of the rectangular box with
+        # solid so the fluid is the inscribed disc. Solid where the (y,z) point lies
+        # OUTSIDE a circle of radius R centred at (cy, cz). Uniform in x.
+        R = float(hf.get('pipe_R', 0.5 * min(Ly, Lz)))
+        cy = float(hf.get('pipe_yc', 0.5 * Ly))
+        cz = float(hf.get('pipe_zc', 0.5 * Lz))
+
+        def mask(xv, yv, zv):
+            Y, Z = torch.meshgrid(yv, zv, indexing='ij')        # (Ny, Nz)
+            solid = ((Y - cy) ** 2 + (Z - cz) ** 2) > R ** 2    # (Ny, Nz)
+            return solid.to(torch.float64).unsqueeze(0).expand(len(xv), -1, -1).clone()
+    else:
+        def mask(xv, yv, zv):
+            # h on the (x, y) plane of this location, then compare to z (broadcast).
+            X, Y = torch.meshgrid(xv, yv, indexing='ij')          # (Nx, Ny)
+            H = height_field(X, Y, Lx=Lx, Ly=Ly, **hf)            # (Nx, Ny)
+            return (zv.view(1, 1, -1) < H.unsqueeze(-1)).to(torch.float64)
 
     return {
         'chi_u': mask(xf, yc, zc),
