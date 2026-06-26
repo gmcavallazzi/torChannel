@@ -55,9 +55,31 @@ def _coords(nx, ny, nz, Lx, Ly, z_c, z_f, device):
     return xc, xf, yc, yf, zc, zf
 
 
+def _koch_zigzag_disp(N, r, y_norm):
+    """Generation-N area-balanced zigzag displacement (same generator as the scalar
+    Koch IC, D_f = log4/log r) sampled at base coordinate y_norm in [0,1]. N=0 -> 0.
+    Used to give the herringbone ridge a self-similar, multi-scale (fractal) spanwise
+    corrugation: higher N adds finer wall scales at ~constant envelope amplitude."""
+    if N <= 0:
+        return np.zeros_like(y_norm)
+    a = np.sqrt((1.0 / r) ** 2 - 0.25 ** 2)
+    motif = np.array([[0., 0.], [0.25, a], [0.5, 0.], [0.75, -a], [1., 0.]])
+    pts = np.array([[0., 0.], [1., 0.]])
+    mx, my = motif[:, 0], motif[:, 1]
+    for _ in range(int(N)):
+        p0, p1 = pts[:-1], pts[1:]
+        d = p1 - p0
+        perp = np.stack([-d[:, 1], d[:, 0]], axis=1)
+        new = (p0[:, None, :] + mx[None, :, None] * d[:, None, :]
+               + my[None, :, None] * perp[:, None, :])
+        pts = np.concatenate([new[:, :-1, :].reshape(-1, 2), pts[-1:]], 0)
+    s, disp = pts[:, 0], pts[:, 1]
+    return np.interp(y_norm, s, disp)
+
+
 def height_field(x, y, kind='slab', z1=0.2, h0=0.2, A=0.1, kx=1.0, ky=1.0,
                  Lx=1.0, Ly=1.0, n_waves_x=2, n_waves_y=1,
-                 apex_frac=0.5, stagger=True):
+                 apex_frac=0.5, stagger=True, N=0, r=3.0, koch_amp=1.0):
     """Solid-region height h(x, y); a point is solid where its z < h(x, y).
 
     x, y are broadcast together (e.g. meshgrid). For 'grooves', kx, ky are
@@ -89,6 +111,29 @@ def height_field(x, y, kind='slab', z1=0.2, h0=0.2, A=0.1, kx=1.0, ky=1.0,
         tri = torch.where(y < ya, y / ya.clamp(min=1e-9),
                           (Ly - y) / (Ly - ya).clamp(min=1e-9))
         phase = 2.0 * np.pi * xloc - np.pi * n_waves_y * tri
+        return h0 + A * torch.cos(phase)
+    if kind == 'koch_herringbone':
+        # staggered herringbone whose spanwise ridge profile is a generation-N
+        # area-balanced Koch zigzag -> a "fractal inlet surface" proxy: the
+        # corrugated wall carries multi-scale structure (more wall scales with N),
+        # driving a multi-scale near-wall secondary flow. N=0 == smooth herringbone.
+        period_x = Lx / n_waves_x
+        cyc = torch.floor(x / period_x)
+        xloc = x / period_x - cyc
+        if stagger:
+            apex = torch.where((cyc.long() % 2) == 0,
+                               torch.full_like(x, apex_frac),
+                               torch.full_like(x, 1.0 - apex_frac))
+        else:
+            apex = torch.full_like(x, apex_frac)
+        ya = apex * Ly
+        tri = torch.where(y < ya, y / ya.clamp(min=1e-9),
+                          (Ly - y) / (Ly - ya).clamp(min=1e-9))
+        # generation-N Koch corrugation of the ridge (computed once on the y grid)
+        yn = (y / Ly).detach().cpu().numpy()
+        disp = _koch_zigzag_disp(N, r, yn.ravel()).reshape(yn.shape)
+        delta = torch.as_tensor(disp, device=x.device, dtype=x.dtype) * float(koch_amp)
+        phase = 2.0 * np.pi * xloc - np.pi * n_waves_y * (tri + delta)
         return h0 + A * torch.cos(phase)
     raise ValueError(f"unknown immersed height kind {kind!r}")
 

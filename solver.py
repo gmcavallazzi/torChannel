@@ -329,6 +329,9 @@ class ChannelFlow:
                 n_waves_x=n_x, n_waves_y=n_y,
                 apex_frac=ib_config.get('apex_frac', 0.5),
                 stagger=ib_config.get('stagger', True),
+                # koch_herringbone (fractal inlet-surface proxy): wall Koch generation
+                N=ib_config.get('N', 0), r=ib_config.get('r', 3.0),
+                koch_amp=ib_config.get('koch_amp', 1.0),
             )
             self.ib_masks = build_masks(self.nx, self.ny, self.nz,
                                         self.Lx, self.Ly, self.Lz,

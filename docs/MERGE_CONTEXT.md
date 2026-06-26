@@ -336,6 +336,34 @@ WELL WITHIN the proposal's Re in [1,200] — no turbulence, no edge-of-range Re 
 A standalone rebuttal write-up (setup + TikZ sketch, all tables/figures, mechanism,
 limitations) lives in `rebuttal/` (git-EXCLUDED via .git/info/exclude, not tracked).
 
+### FRACTAL INLET SURFACE (proxy) — DONE: a PENALTY, not a benefit
+The proposal's OTHER implementation is the fractal inlet SURFACE (Koch-corrugated orifice
+wall acting via near-wall secondary flow), distinct from the baffle (interface) we tested
+above. Proxy: `immersed.py` kind='koch_herringbone' — the staggered-herringbone ridge gets
+a generation-N area-balanced Koch zigzag (same generator/Df as the scalar), so the wall
+carries multi-scale (fractal) corrugation; N=0 == smooth herringbone. Swept the WALL
+generation with a FLAT two-stream interface (the wall does the folding), Sc=16 TVD, Re=100
+(`configs` via `scripts/run_wall_sweep.py`). div~1e-12, stable.
+- **L_mix(N)/L_mix(0) = 1.000 / 1.162 / 1.169 — a ~17% PENALTY** (vs proposal 0.25/0.062).
+  The fractal wall mixes WORSE, saturating. f_perp ~0.045-0.049 across N (the corrugation
+  adds no transverse energy).
+- Mechanism (matches chaotic-mixing theory, t_mix~log(Pe)/lambda): the smooth chevron drives
+  COHERENT counter-rotating rolls (high stretching rate lambda); the fractal corrugation
+  FRAGMENTS the rolls into weaker multi-scale motion -> LOWER lambda -> slower mixing. The
+  fractal wall degrades the coherent folding rather than folding at finer scales.
+- So BOTH proposal implementations fail r^{-Df N}: baffle (interface) flat ~0.98; surface
+  (wall) a ~1.17 penalty. The only fully-faithful untested variant is the surface in a TRUE
+  developing junction (inflow/outflow), but the periodic-box proxy already shows a penalty.
+  Wall-shape figure: `results/figures/fractal_wall.png`.
+
+Lit context (web search): existing Koch/Cantor fractal micromixers enhance mixing via
+DOWNSTREAM obstacles at a documented PRESSURE-DROP cost (Tian/Xiong/Chen; Cantor-GA Sci Rep
+2022; Murray's-law baffles) — the Falk-Commenge coupling the proposal claims to break. The
+inlet-only fractal is novel, but chaotic-mixing theory (t_mix~log(Pe)/lambda, striations
+~sigma^-n from initial length ~w) says the initial interface gives at most a LOGARITHMIC,
+not power-law, benefit — i.e. r^{-Df N} is inconsistent with standard mixing physics, which
+our DNS confirms.
+
 ## OVERALL CONCLUSION (torChannel, all accessible laminar regimes)
 L_mix(N)/L_mix(0) is FLAT (~1.0, never the proposed r^{-Df N}) across: plain duct Sc=1/16/100
 (0.98, Sc-independent to 5 sig figs), weak herringbone duct (1.00), AND a STRONG laminar
