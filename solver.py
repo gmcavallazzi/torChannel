@@ -10,7 +10,7 @@ from projection import build_poisson_matrix, solve_poisson, project_velocity
 from projection_fft import initialize_fft_solver, solve_poisson_fft
 from turbstats import TurbulenceStats
 from scalar import (apply_scalar_bc, advection_scalar, advection_scalar_tvd,
-                    diffusion_xy_scalar,
+                    diffusion_xy_scalar, diffusion_z_scalar,
                     solve_implicit_diffusion_scalar, initialize_scalar,
                     scalar_stats, save_scalar_field, load_scalar_field)
 from immersed import build_masks, penalize, fluid_cell_volume, solid_fraction
@@ -960,6 +960,39 @@ class ChannelFlow:
         self.scalar = solve_implicit_diffusion_scalar(
             self.scalar, float(dt), self.nx, self.ny, self.nz, self.dz_c, self.dz_f,
             D, theta=self.scalar_theta, wall_bc=self.scalar_wall_bc)
+        self._apply_scalar_bc()
+
+    def _scalar_spatial_rhs(self):
+        """Fully-explicit scalar RHS  L(c) = D*(d2_xy + d2_z) - adv  on the current
+        (frozen) velocity. Ghost cells must be up to date (call _apply_scalar_bc first).
+        Returns a full ghosted-shape tensor (interior filled). Used by the SSP-RK3 march."""
+        D = self.scalar_D
+        if self.scalar_scheme == 'tvd':
+            adv_c = advection_scalar_tvd(self.scalar, self.u, self.v, self.w,
+                                         self.nx, self.ny, self.nz, self.dx, self.dy,
+                                         self.dz_f, self.bc_y, self.scalar_wall_bc, self.bc_x)
+        else:
+            adv_c = advection_scalar(self.scalar, self.u, self.v, self.w,
+                                     self.nx, self.ny, self.nz, self.dx, self.dy, self.dz_f)
+        diff_xy_c = diffusion_xy_scalar(self.scalar, self.nx, self.ny, self.nz,
+                                        self.dx, self.dy, D)
+        diff_z_c = diffusion_z_scalar(self.scalar, self.nx, self.ny, self.nz,
+                                      self.dz_c, self.dz_f, D)
+        return diff_xy_c + diff_z_c - adv_c
+
+    def advance_scalar_ssprk3(self, dt):
+        """One SSP-RK3 (Shu-Osher) step of the passive scalar, fully explicit (z-diffusion
+        explicit too). Strong-stability-preserving: keeps the TVD/boundedness of the spatial
+        scheme up to CFL~1. Intended for FROZEN-velocity, high-Sc marches where advection
+        limits dt (and explicit z-diffusion is cheap); use the IMEX `advance_scalar` (AB2 +
+        implicit z) instead at low Sc, where z-diffusion would otherwise cap dt."""
+        c0 = self.scalar.clone()
+        self._apply_scalar_bc(); L0 = self._scalar_spatial_rhs()
+        self.scalar = c0 + dt * L0
+        self._apply_scalar_bc(); L1 = self._scalar_spatial_rhs()
+        self.scalar = 0.75 * c0 + 0.25 * (self.scalar + dt * L1)
+        self._apply_scalar_bc(); L2 = self._scalar_spatial_rhs()
+        self.scalar = (c0 + 2.0 * (self.scalar + dt * L2)) / 3.0
         self._apply_scalar_bc()
 
     def step_rk3(self, dt):

@@ -183,6 +183,24 @@ def diffusion_xy_scalar(c: torch.Tensor, nx: int, ny: int, nz: int,
 
 
 @torch.jit.script
+def diffusion_z_scalar(c: torch.Tensor, nx: int, ny: int, nz: int,
+                       dz_c: torch.Tensor, dz_f: torch.Tensor, D: float) -> torch.Tensor:
+    """Explicit wall-normal diffusion D*d2c/dz2 on the stretched z-grid, using the z
+    ghost cells (filled by apply_scalar_bc, which encodes the no-flux/Dirichlet wall BC).
+    Companion to diffusion_xy_scalar for the fully-explicit SSP-RK3 scalar march
+    (frozen velocity, high Sc) where z-diffusion is cheap and need not be implicit."""
+    out = torch.zeros_like(c)
+    C = c[1:nx+1, 1:ny+1, :]                       # (nx, ny, nz+2), ghosts at 0 and nz+1
+    dz_left = dz_c[0:nz].view(1, 1, nz)
+    dz_right = dz_c[1:nz+1].view(1, 1, nz)
+    dz_cell = dz_f[0:nz].view(1, 1, nz)
+    d2z = ((C[:, :, 2:nz+2] - C[:, :, 1:nz+1]) / dz_right
+           - (C[:, :, 1:nz+1] - C[:, :, 0:nz]) / dz_left) / dz_cell
+    out[1:nx+1, 1:ny+1, 1:nz+1] = D * d2z
+    return out
+
+
+@torch.jit.script
 def solve_implicit_diffusion_scalar(c: torch.Tensor, dt: float,
                                     nx: int, ny: int, nz: int,
                                     dz_c: torch.Tensor, dz_f: torch.Tensor,
