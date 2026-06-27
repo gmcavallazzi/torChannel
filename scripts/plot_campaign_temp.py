@@ -25,12 +25,14 @@ def crossing(xvec, Mvec, thr):
     return x0 + (thr - m0) * (x1 - x0) / (m1 - m0) if m1 != m0 else x1
 
 
-def load_Mx(indir, mode, Sc, N):
-    """Return (x, Mx, converged?) using final.npz if present else latest snapshot."""
+def load_Mx(indir, mode, Sc, N, force_snap=False):
+    """Return (x, Mx, converged?) using final.npz if present else latest snapshot.
+    force_snap=True takes the latest snapshot even if a final.npz exists (use when the
+    final on disk is stale, e.g. a case being rerun)."""
     tag = f"{mode}_Sc{int(Sc)}_N{N}"
     fp = os.path.join(indir, f"{tag}_final.npz")
     sp = os.path.join(indir, f"{tag}_snaps.npz")
-    if os.path.exists(fp):
+    if os.path.exists(fp) and not force_snap:
         d = np.load(fp, allow_pickle=True)
         return d['x'], d['Mx'], True
     if os.path.exists(sp):
@@ -51,6 +53,8 @@ def main():
     ap.add_argument('--out', default=None)
     ap.add_argument('--left-only', action='store_true',
                     help="plot only the M(x) panel (no L_mix ratio panel)")
+    ap.add_argument('--snap-Ns', type=int, nargs='+', default=[],
+                    help="take these N from the latest snapshot (stale/rerunning final)")
     a = ap.parse_args()
     Df, r = np.log(4)/np.log(3), 3.0
 
@@ -61,7 +65,7 @@ def main():
         fig, axs = plt.subplots(1, 2, figsize=(9.5, 4.0))
     Lmix = {}
     for N in a.Ns:
-        x, Mx, conv = load_Mx(a.indir, a.mode, a.Sc, N)
+        x, Mx, conv = load_Mx(a.indir, a.mode, a.Sc, N, force_snap=(N in a.snap_Ns))
         if x is None:
             continue
         lab = (r"$N=%d$" % N) + ("" if conv else " (partial)")

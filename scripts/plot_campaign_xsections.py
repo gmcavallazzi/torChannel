@@ -10,13 +10,33 @@ import matplotlib; matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.path import Path
 from matplotlib.patches import PathPatch
+from immersed import _koch_zigzag_disp
 
 usetex = os.environ.get("TORCHANNEL_USETEX", "1") == "1"
 plt.rcParams.update({"text.usetex": usetex, "font.family": "serif", "font.size": 10})
 
-# pipe geometry from mixing_campaign.base_config('baffle'): inscribed disc in unit square
+# pipe geometry from mixing_campaign.base_config: inscribed disc in unit square
 R, CY, CZ = 0.42, 0.5, 0.5
 LY = LZ = 1.0
+# surface_baffle fractal-wall params (immersed kind='pipe_koch')
+KOCH_AMP, R_RATIO, N_LOBES, INLET_LEN = 0.15, 3.0, 6, 1.0
+
+
+def wall_boundary(mode, N, x):
+    """Analytic wall outline (y,z) at streamwise station x for generation N.
+    'baffle' -> plain circle. 'surface_baffle' -> Koch-corrugated orifice near the
+    inlet (half-cosine streamwise envelope over inlet_len; smooth disc downstream),
+    matching immersed kind='pipe_koch' / scripts.snapshot_pipe_xsections."""
+    th = np.linspace(0, 2 * np.pi, 2001)
+    if mode != 'surface_baffle' or N <= 0:
+        return CY + R * np.cos(th), CZ + R * np.sin(th)
+    tn = ((th + np.pi) / (2 * np.pi) * N_LOBES) % 1.0
+    d = _koch_zigzag_disp(N, R_RATIO, tn)
+    m = np.max(np.abs(d))
+    dhat = d / m if m > 0 else d
+    env = 0.5 * (1.0 + np.cos(np.pi * min(x, INLET_LEN) / INLET_LEN)) if x < INLET_LEN else 0.0
+    Rw = R + KOCH_AMP * R * env * dhat
+    return CY + Rw * np.cos(th), CZ + Rw * np.sin(th)
 
 
 def main():
@@ -28,11 +48,6 @@ def main():
     ap.add_argument('--indir', default='results/campaign')
     ap.add_argument('--out', default=None)
     a = ap.parse_args()
-
-    # circle clip path (true physical coords)
-    th = np.linspace(0, 2 * np.pi, 400)
-    yb, zb = CY + R * np.cos(th), CZ + R * np.sin(th)
-    circle = np.column_stack([yb, zb])
 
     rows = []
     for N in a.Ns:
@@ -58,7 +73,8 @@ def main():
             cc = sc[i, :, :]
             pcm = ax.pcolormesh(Yc, Zc, cc, shading='gouraud', cmap='RdBu_r',
                                 vmin=0, vmax=1)
-            clip = PathPatch(Path(circle), transform=ax.transData,
+            yb, zb = wall_boundary(a.mode, N, xs)          # faithful per-(N,x) outline
+            clip = PathPatch(Path(np.column_stack([yb, zb])), transform=ax.transData,
                              facecolor='none', edgecolor='none')
             ax.add_patch(clip); pcm.set_clip_path(clip)
             ax.plot(yb, zb, color='k', lw=0.7)

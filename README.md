@@ -60,9 +60,26 @@ the solid mask `chi_c`.
 **saturating** enhancement (N=3 ≈ N=2, no further gain), nowhere near Eq.4's
 1.00 / 0.25 / 0.06. The area-sensitive signal is present (the inlet interface folds with N),
 but the asymptotic mixing length is set by the gravest cross-channel diffusive mode, which is
-N-blind. Figures in `results/figures/campaign_Sc10_partial/`.
+N-blind. Figures: `Mx.png`, `xsections.png` in `results/figures/campaign_Sc10_partial/`.
 
-`surface_baffle` (fractal **wall** surface variant) results to be added later.
+### surface_baffle (fractal WALL surface + Koch baffle)
+
+Same developing pipe, but the orifice WALL itself is a generation-`N` Koch-corrugated ring
+near the inlet (immersed `kind='pipe_koch'`, `n_lobes=6`, half-cosine streamwise envelope over
+`inlet_len=1`), on top of the Koch baffle. Tests the proposal's *fractal inlet surface* variant.
+Generations `N = 0 … 4`, all converged.
+
+**Result (L_mix at M=0.70): ratio 1.00 / 0.95 / 0.80 / 0.79 / 0.79** — again **saturating**
+(N=2 ≈ N=3 ≈ N=4), and if anything slightly weaker than the plain baffle: the fractal wall adds
+no benefit over the interface. Figures: `Mx_surface.png`, `xsections_surface.png` (the latter
+draws the faithful per-(N,x) Koch wall outline, smooth disc downstream).
+
+| variant | L_mix(N)/L_mix(0) at M=0.70, N=0→4 |
+|---|---|
+| baffle (interface)        | 1.00 / 0.90 / 0.76 / 0.75 / — |
+| surface_baffle (fractal wall) | 1.00 / 0.95 / 0.80 / 0.79 / 0.79 |
+
+Both refute Eq.4 (`r^{-D_f N}` = 1.00 / 0.25 / 0.06 / 0.015) and both saturate by N=2/3.
 
 ---
 
@@ -93,6 +110,10 @@ export TORCHANNEL_USETEX=1 PYTORCH_JIT=0
 python scripts/plot_campaign_temp.py      --mode baffle --Sc 10 --Ns 0 1 2 3 --thr 0.7 --left-only
 # developing (y,z) cross-sections down the pipe, clipped to the wall, M(x) labelled
 python scripts/plot_campaign_xsections.py --mode baffle --Sc 10 --Ns 0 1 2 3
+
+# surface_baffle (faithful per-(N,x) Koch wall outline drawn automatically)
+python scripts/plot_campaign_temp.py      --mode surface_baffle --Sc 10 --Ns 0 1 2 3 4 --thr 0.7 --left-only
+python scripts/plot_campaign_xsections.py --mode surface_baffle --Sc 10 --Ns 0 1 2 3 4
 ```
 
 `scripts/plot_campaign_snaps.py` (inlet circles) and `scripts/plot_campaign_circumference.py`
