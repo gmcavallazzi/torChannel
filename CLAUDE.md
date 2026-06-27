@@ -9,28 +9,30 @@ TorChannel is a GPU-accelerated Direct Numerical Simulation (DNS) solver for inc
 ## Commands
 
 ```bash
-# Run a simulation
-python main.py config550.yaml
+# Run the duct mixing campaign (baffle or surface_baffle, N-sweep)
+python scripts/mixing_campaign.py --mode baffle --Sc 10 --dt 5e-4 --Ns 0 1 2
 
 # Run on HPC cluster (SLURM)
-sbatch launch.sh
+sbatch slurm/baffle_sc100.sh
 
 # Install dependencies
 pip install -r requirements.txt
 
 # Run a single test
-python tests/test_derivative.py
+python tests/test_scalar.py
 
-# Post-process results
-python post_process.py results/fields.npz --config config550.yaml
-python plot_statistics.py results/turbulence_stats.npz --config config550.yaml
+# Plot the canonical campaign figures (needs `module load texlive`)
+python scripts/plot_campaign_temp.py      --mode baffle --Sc 10 --Ns 0 1 2 --thr 0.7 --left-only
+python scripts/plot_campaign_xsections.py --mode baffle --Sc 10 --Ns 0 1 2
 ```
 
 There is no test runner framework (no pytest). Tests are standalone scripts run individually with `python tests/test_<name>.py`.
 
 ## Architecture
 
-**Entry point**: `main.py` → creates `ChannelFlow` (from `solver.py`) and calls `run_simulation()`.
+**Entry point**: `scripts/mixing_campaign.py` builds a config and drives `ChannelFlow`
+(from `solver.py`) over an N-sweep (the duct mixing study). This is a duct-only repo —
+the generic `main.py` channel driver and channel post-processing live in the public repo.
 
 **Core modules**:
 - `solver.py` — Main `ChannelFlow` class: time-stepping loop, IMEX/AB2/FE schemes, adaptive dt, restart logic, bulk velocity forcing
@@ -44,7 +46,7 @@ There is no test runner framework (no pytest). Tests are standalone scripts run 
 
 **Staggered grid layout**: Velocities are staggered (u at x-faces, v at y-faces, w at z-faces). Pressure is cell-centered. Periodic in x,y; wall-bounded in z with no-slip or free-slip BCs.
 
-**Configuration**: YAML files (see `config550.yaml` for Re_τ=550 example). Key sections: `grid`, `domain`, `flow`, `time`, `initialization`, `statistics`.
+**Configuration**: YAML files (see `configs/duct_koch.yaml` for a duct example, or the in-code `base_config` in `scripts/mixing_campaign.py`). Key sections: `grid`, `domain`, `flow`, `time`, `initialization`, `scalar`, `immersed`.
 
 **Output**: `.npz` files for fields, timeseries, and statistics checkpoints. Restart is supported by pointing `initialization.field_file` to a saved checkpoint.
 
