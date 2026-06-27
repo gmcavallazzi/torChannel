@@ -53,8 +53,14 @@ the solid mask `chi_c`.
 
 | N | state |
 |---|-------|
-| 0, 1, 2 | ✅ present (clean, point-in-polygon IC) |
-| 3, 4 | ⏳ rerunning with the fixed IC (see below) |
+| 0, 1, 2, 3 | ✅ present (clean, point-in-polygon IC) |
+| 4 | not run — benefit saturates by N=2/3 (see result below) |
+
+**Result (L_mix at M=0.70): ratio 1.00 / 0.90 / 0.76 / 0.75 for N=0/1/2/3** — a real but
+**saturating** enhancement (N=3 ≈ N=2, no further gain), nowhere near Eq.4's
+1.00 / 0.25 / 0.06. The area-sensitive signal is present (the inlet interface folds with N),
+but the asymptotic mixing length is set by the gravest cross-channel diffusive mode, which is
+N-blind. Figures in `results/figures/campaign_Sc10_partial/`.
 
 `surface_baffle` (fractal **wall** surface variant) results to be added later.
 
@@ -77,19 +83,20 @@ pass. `N=0,1,2` here were unaffected; `N=3,4` are being regenerated.
 
 ## Regenerating the figures
 
+The two **canonical** figures (`results/figures/campaign_Sc10_partial/`):
+
 ```bash
 module load texlive            # figures use LaTeX rendering
 export TORCHANNEL_USETEX=1 PYTORCH_JIT=0
 
+# steady M(x) per N (left panel only)
+python scripts/plot_campaign_temp.py      --mode baffle --Sc 10 --Ns 0 1 2 3 --thr 0.7 --left-only
 # developing (y,z) cross-sections down the pipe, clipped to the wall, M(x) labelled
-python scripts/plot_campaign_xsections.py   --mode baffle --Sc 10 --Ns 0 1 2 3 4
-# inlet (y,z) cross-sections, one circle per N
-python scripts/plot_campaign_snaps.py       --mode baffle --Sc 10 --Ns 0 1 2 3 4
-# steady M(x) + L_mix(N)/L_mix(0) ratio vs Eq.4
-python scripts/plot_campaign_temp.py        --mode baffle --Sc 10 --Ns 0 1 2 3 4 --thr 0.7
-# diagnostic: scalar sampled around the wall circumference (artifact check)
-python scripts/plot_campaign_circumference.py --mode baffle --Sc 10 --Ns 0 1 2 3 4
+python scripts/plot_campaign_xsections.py --mode baffle --Sc 10 --Ns 0 1 2 3
 ```
+
+`scripts/plot_campaign_snaps.py` (inlet circles) and `scripts/plot_campaign_circumference.py`
+(wall-circumference sampling) are **diagnostics/tests**, not canonical outputs.
 
 Campaign driver: `scripts/mixing_campaign.py`; SLURM: `slurm/baffle_sc10*.sh`.
 
