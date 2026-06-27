@@ -81,6 +81,22 @@ draws the faithful per-(N,x) Koch wall outline, smooth disc downstream).
 
 Both refute Eq.4 (`r^{-D_f N}` = 1.00 / 0.25 / 0.06 / 0.015) and both saturate by N=2/3.
 
+### Sc=100 (baffle, N=0,2) — near-inlet, and Sc-independence
+
+At Sc=100 mixing is ~10x slower, so Lx=6 only resolves the **near-inlet** early-mixing stage
+(M from 0.98 down to ~0.85; the M=0.90 crossing moves from x≈4 at Sc=10 to x≈40, off the grid).
+Run on a refined streamwise grid (nx=192 to tame cell-Pe; cross-section 96², pure diffusion).
+Figures: `results/figures/campaign_Sc100/{Mx,xsections}.png`.
+
+- **L_mix(N=2)/L_mix(0) at M=0.90 = 0.445** (N=2 reaches M=0.90 at x≈2.4 vs N=0 at x≈5.4).
+- **Sc-independent to ~12%**: at the *same* M≈0.90–0.91 threshold, Sc=10 gives ≈0.39–0.40 vs
+  Sc=100's ≈0.44. Absolute L_mix scales ∝ Sc (×11 for N=0, ×12.6 for N=2 from Sc=10→100) —
+  the textbook diffusive-limit signature; the *ratio* is invariant.
+- Open question (untested here): the N=2 ratio is Sc-invariant because N=2's scales (~0.11) survive
+  at both Sc. Finer generations (N≥4, scales ~0.012) survive only at high Sc, so the collapse
+  generation should grow with Sc — but N=4 needs a resolved cross-section (ny=nz≥256). That test
+  is set up via the frozen-velocity + SSP-RK3 scalar path (`scripts/run_frozen_scalar.py`).
+
 ---
 
 ## Koch-interface sign fix (important)
