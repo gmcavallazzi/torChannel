@@ -33,7 +33,7 @@ from scalar import scalar_stats
 from utils import compute_divergence
 
 
-def base_config(mode, Sc, dt, nx=64, ny=96, nz=96):
+def base_config(mode, Sc, dt, nx=64, ny=96, nz=96, Lx=6.0):
     # Short developing duct, circular cross-section. The N-dependence lives near the inlet
     # (Koch folds + the surface's secondary flow), so Lx=6 resolves that region rather than
     # the long diffusive tail. `baffle` uses a SMOOTH circular wall (kind='pipe'); the wall
@@ -50,7 +50,7 @@ def base_config(mode, Sc, dt, nx=64, ny=96, nz=96):
         raise ValueError(mode)
     return dict(
         grid={'nx': nx, 'ny': ny, 'nz': nz},
-        domain={'Lx': 6.0, 'Ly': 1.0, 'Lz': 1.0, 'bc_y': 'wall', 'bc_x': 'inout'},
+        domain={'Lx': Lx, 'Ly': 1.0, 'Lz': 1.0, 'bc_y': 'wall', 'bc_x': 'inout'},
         flow={'Re': 40.0, 'Re_tau': 10.0, 'U_bulk': 1.0, 'gamma': 1.0},
         boundary_conditions={'top_wall': {'type': 'dirichlet'}},
         initialization={'type': 'parabolic', 'perturbation_intensity': 0.0},

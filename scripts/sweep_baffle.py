@@ -19,7 +19,7 @@ Example (the planned run):
   python scripts/sweep_baffle.py --Sc 100 --Ns 0 1 2 3 4 \
          --nx 192 --ny 256 --nz 256 --vel_ny 128 --vel_nz 128 --dt_vel 2.5e-4
 """
-import os, sys, time, argparse, tempfile, yaml
+import os, sys, time, argparse, tempfile, yaml, gc
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import numpy as np, torch
@@ -47,8 +47,8 @@ def _cell_axes(sim):
     return x, y, z
 
 
-def _build(mode, Sc, dt, nx, ny, nz, N):
-    cfg = base_config(mode, Sc, dt, nx=nx, ny=ny, nz=nz)
+def _build(mode, Sc, dt, nx, ny, nz, N, Lx=6.0):
+    cfg = base_config(mode, Sc, dt, nx=nx, ny=ny, nz=nz, Lx=Lx)
     cfg['scalar']['N'] = N
     f = tempfile.NamedTemporaryFile('w', suffix='.yaml', delete=False); yaml.safe_dump(cfg, f); f.close()
     return ChannelFlow(f.name)
@@ -100,9 +100,11 @@ def main():
     ap.add_argument('--mode', default='baffle', choices=['baffle'])
     ap.add_argument('--Sc', type=float, default=100.0)
     ap.add_argument('--Ns', type=int, nargs='+', default=[0, 1, 2, 3, 4])
-    ap.add_argument('--nx', type=int, default=192)
+    ap.add_argument('--nx', type=int, default=192, help="scalar streamwise planes (over --Lx)")
     ap.add_argument('--ny', type=int, default=256)
     ap.add_argument('--nz', type=int, default=256)
+    ap.add_argument('--Lx', type=float, default=6.0, help="scalar domain length (mixing length grows ~Pe)")
+    ap.add_argument('--vel_nx', type=int, default=192, help="velocity streamwise planes (always over Lx=6, the developing region)")
     ap.add_argument('--vel_ny', type=int, default=128, help="coarse velocity cross-section (y)")
     ap.add_argument('--vel_nz', type=int, default=128, help="coarse velocity cross-section (z)")
     ap.add_argument('--dt_vel', type=float, default=2.5e-4)
@@ -115,32 +117,40 @@ def main():
     ap.add_argument('--outdir', default='results/campaign')
     a = ap.parse_args()
 
-    cache = a.vel_cache or os.path.join(a.outdir, f"velcache_{a.mode}_{a.nx}x{a.vel_ny}x{a.vel_nz}.npz")
+    cache = a.vel_cache or os.path.join(a.outdir, f"velcache_{a.mode}_{a.vel_nx}x{a.vel_ny}x{a.vel_nz}.npz")
     os.makedirs(a.outdir, exist_ok=True)
 
     # ---- velocity: solve ONCE on the coarse cross-section (N-independent), cache ----
-    u_cc_c, xc, yc, zc = solve_coarse_velocity(a.mode, a.nx, a.vel_ny, a.vel_nz,
+    # Always solved over the developing region Lx=6 (the flow is fully developed by x~3); for a
+    # longer scalar domain the x-interpolation edge-clamps to this developed profile (exact).
+    u_cc_c, xc, yc, zc = solve_coarse_velocity(a.mode, a.vel_nx, a.vel_ny, a.vel_nz,
                                                a.dt_vel, a.vel_steps, a.vel_tol, cache)
 
     # ---- interpolate coarse velocity onto the fine scalar grid ONCE (N-independent) ----
-    probe = _build(a.mode, a.Sc, 1e-3, a.nx, a.ny, a.nz, 0)
+    probe = _build(a.mode, a.Sc, 1e-3, a.nx, a.ny, a.nz, 0, Lx=a.Lx)
     xf, yf, zf = _cell_axes(probe)
     nx, ny, nz = probe.nx, probe.ny, probe.nz
     u_int = _interp1d(_interp1d(_interp1d(u_cc_c, xc, xf, 0), yc, yf, 1), zc, zf, 2)  # (nx,ny,nz)
-    chi_f = probe.chi_c[1:nx+1, 1:ny+1, 1:nz+1]
+    chi_f = probe.chi_c[1:nx+1, 1:ny+1, 1:nz+1].clone()       # detach from probe so it can be freed
     u_int = u_int * (1.0 - chi_f)                              # zero inside the fine solid mask
     u_cc = torch.zeros(nx+2, ny+2, nz+2, dtype=torch.float64, device=u_int.device)
     u_cc[1:nx+1, 1:ny+1, 1:nz+1] = u_int
-    print(f"  [vel] interpolated {a.nx}x{a.vel_ny}x{a.vel_nz} -> {nx}x{ny}x{nz}; "
+    print(f"  [vel] interpolated {a.vel_nx}x{a.vel_ny}x{a.vel_nz} (Lx=6) -> {nx}x{ny}x{nz} (Lx={a.Lx:g}); "
           f"max u_cc={float(u_int.max()):.3f}", flush=True)
     dummy = torch.zeros_like(u_cc)
 
     # ---- per-N parabolic scalar sweep on the fine grid ----
     Lx = float(probe.Lx)
+    # Free the interpolation solver + temporaries: only ONE fine ChannelFlow may be resident at
+    # a time (each is ~50 GB at 576x768x768), or the sweep OOMs at the N->N+1 transition.
+    del probe, u_int, u_cc_c, xf, yf, zf
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
     print(f"=== sweep {a.mode} Sc={a.Sc} N={a.Ns} grid={nx}x{ny}x{nz} ===", flush=True)
     summary = []
     for N in a.Ns:
-        sim = _build(a.mode, a.Sc, 1e-3, a.nx, a.ny, a.nz, N) if N != 0 else probe
+        sim = _build(a.mode, a.Sc, 1e-3, a.nx, a.ny, a.nz, N, Lx=a.Lx)
         D = sim.scalar_D
         t0 = time.time()
         sim.scalar = march_scalar_steady(sim.c_inlet, dummy, dummy, dummy, nx, ny, nz,
@@ -166,6 +176,11 @@ def main():
                  chi_yz=chi_f[xs_idx[0]].detach().cpu().numpy(),              # (ny, nz) wall mask
                  xs=np.linspace(0, Lx, nx)[xs_idx])
         summary.append((N, lm))
+        # release this N's fine solver + scalar field before building the next one
+        del sim, cc
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
     print("\n=== L_mix(N)/L_mix(0) summary (M={:.2f}) ===".format(a.thr), flush=True)
     l0 = summary[0][1] if summary and np.isfinite(summary[0][1]) else float('nan')
