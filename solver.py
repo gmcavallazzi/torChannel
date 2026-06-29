@@ -12,6 +12,7 @@ from turbstats import TurbulenceStats
 from scalar import (apply_scalar_bc, advection_scalar, advection_scalar_tvd,
                     diffusion_xy_scalar, diffusion_z_scalar,
                     solve_implicit_diffusion_scalar, initialize_scalar,
+                    march_scalar_steady,
                     scalar_stats, save_scalar_field, load_scalar_field)
 from immersed import build_masks, penalize, fluid_cell_volume, solid_fraction
 
@@ -994,6 +995,27 @@ class ChannelFlow:
         self._apply_scalar_bc(); L2 = self._scalar_spatial_rhs()
         self.scalar = (c0 + 2.0 * (self.scalar + dt * L2)) / 3.0
         self._apply_scalar_bc()
+
+    def solve_scalar_parabolic(self, cross_adv=True, n_inner=30, tol=1e-9, verbose=True):
+        """Steady parabolized (space-marching) scalar solve on the current frozen velocity.
+
+        A fast OPTION alongside advance_scalar / advance_scalar_ssprk3: rather than
+        time-marching the scalar to steady state (~Pe pseudo-time steps), it integrates
+        the streamwise-parabolic steady balance in a single downstream sweep (see
+        scalar.march_scalar_steady). Intended for a developing duct (bc_x='inout') with
+        a frozen, forward (u>0) velocity and no-flux z walls. Overwrites self.scalar with
+        the steady field and returns it."""
+        if self.bc_x != 'inout':
+            raise ValueError("solve_scalar_parabolic requires domain.bc_x='inout' (developing duct)")
+        if not self.scalar_enabled:
+            raise ValueError("solve_scalar_parabolic requires the passive scalar to be enabled")
+        self.scalar = march_scalar_steady(
+            self.c_inlet, self.u, self.v, self.w, self.nx, self.ny, self.nz,
+            self.dx, self.dy, self.dz_c, self.dz_f, self.scalar_D,
+            bc_y=self.bc_y, wall_bc=self.scalar_wall_bc, cross_adv=cross_adv,
+            n_inner=n_inner, tol=tol, verbose=verbose)
+        self._apply_scalar_bc()
+        return self.scalar
 
     def step_rk3(self, dt):
         """

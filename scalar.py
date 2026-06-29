@@ -265,6 +265,145 @@ def solve_implicit_diffusion_scalar(c: torch.Tensor, dt: float,
 
 
 # ---------------------------------------------------------------------------
+# Parabolized (space-marching) STEADY solve  -- fast option for developing ducts
+# ---------------------------------------------------------------------------
+def march_scalar_steady(c_inlet: torch.Tensor, u: torch.Tensor, v: torch.Tensor,
+                        w: torch.Tensor, nx: int, ny: int, nz: int,
+                        dx: float, dy: float, dz_c: torch.Tensor, dz_f: torch.Tensor,
+                        D: float, bc_y: str = 'wall', wall_bc: str = 'neumann',
+                        cross_adv: bool = True, n_inner: int = 30,
+                        tol: float = 1e-9, verbose: bool = False) -> torch.Tensor:
+    """Parabolized space-marching STEADY passive-scalar solve for a developing duct.
+
+    Solves the steady advection-diffusion balance with the STREAMWISE-DIFFUSION term
+    DROPPED (the parabolic approximation -- exact in the high-Peclet limit and, unlike
+    a time-march, free of streamwise numerical diffusion):
+
+        u dc/dx = D (d2c/dy2 + d2c/dz2) - (v dc/dy + w dc/dz).
+
+    Dropping d2c/dx2 makes the equation PARABOLIC in x, so the steady field is obtained
+    in ONE downstream sweep -- one cross-plane solve per x-station -- instead of marching
+    the unsteady scalar to steady state (~Pe pseudo-time steps). The cost is O(nx) plane
+    solves rather than O(Pe) full-field updates, the win that makes high-Sc / high-N
+    sweeps tractable. Requires u > 0 in the fluid (no streamwise recirculation).
+
+    Discretisation (additive -- reuses the existing operators, replaces none):
+      - streamwise   : 2nd-order upwind (BDF2) from the two already-solved upstream
+                       planes (1st-order at the first interior plane). Implicit only in
+                       the diagonal, so streamwise false diffusion is negligible.
+      - cross-plane  : the (y,z) diffusion is solved by ALTERNATING-DIRECTION line
+                       relaxation (ADI) -- each inner sweep does a z-implicit line solve
+                       (stretched grid, SAME no-flux stencil and batched tridiagonal as
+                       solve_implicit_diffusion_scalar) then a y-implicit line solve
+                       (uniform grid). ADI converges in a handful of sweeps; convergence is
+                       fastest at high Sc, where the streamwise term dominates the diagonal.
+      - transverse advection (v,w): the SAME conservative central flux as advection_scalar,
+                       lagged in the sweeps (weak, low cell-Pe -> no limiter needed; pass
+                       cross_adv=False for v=w=0 ducts, e.g. the smooth baffle).
+
+    Args mirror the solver fields: c_inlet is the (ny+2, nz+2) inlet cross-section with
+    ghosts (= ChannelFlow.c_inlet); u/v/w are the frozen MAC velocity (nx+2, ny+2, nz+2).
+    Returns the steady scalar field (nx+2, ny+2, nz+2) with ghosts filled.
+    """
+    if wall_bc != 'neumann':
+        raise NotImplementedError("march_scalar_steady supports wall_bc='neumann' only")
+    device, dtype = u.device, u.dtype
+    c = torch.zeros(nx + 2, ny + 2, nz + 2, device=device, dtype=dtype)
+
+    # --- z-diffusion stencil (no-flux walls), 1-D in z (geometry only) -----------
+    # matches diffusion_z_scalar / solve_implicit_diffusion_scalar: L_z c at cell k =
+    #   lo*c[k-1] + ce*c[k] + up*c[k+1], with the wall ghost folded in (no-flux).
+    dz_left = dz_c[0:nz]; dz_right = dz_c[1:nz+1]; dz_cell = dz_f[0:nz]
+    lo_z = (1.0 / (dz_left * dz_cell)).clone()      # coupling to k-1
+    up_z = (1.0 / (dz_right * dz_cell)).clone()     # coupling to k+1
+    lo_z[0] = 0.0                                   # no-flux bottom wall (ghost c[-1]=c[0])
+    up_z[nz - 1] = 0.0                              # no-flux top wall
+    ce_z = -(lo_z + up_z)                           # diagonal of L_z
+    a_z = -D * lo_z                                 # sub-diagonal of [diag - D*L_z]
+    cc_z = -D * up_z                                # super-diagonal
+    dce = -D * ce_z                                 # z-diffusion contribution to the diagonal
+    inv_dy2 = 1.0 / (dy * dy)
+    dzc = dz_cell.view(1, nz)
+
+    # --- y-diffusion stencil (no-flux walls), 1-D in y (uniform), for the ADI y-sweep ---
+    a_y = torch.full((ny,), -D * inv_dy2, device=device, dtype=dtype)   # sub-diagonal
+    cc_y = torch.full((ny,), -D * inv_dy2, device=device, dtype=dtype)  # super-diagonal
+    a_y[0] = 0.0; cc_y[ny - 1] = 0.0
+    ydiag_self = torch.full((ny,), 2.0 * D * inv_dy2, device=device, dtype=dtype)
+    ydiag_self[0] = D * inv_dy2; ydiag_self[ny - 1] = D * inv_dy2       # one neighbour at walls
+
+    def fill_yz_ghost(p: torch.Tensor) -> None:
+        """No-flux/periodic y ghosts + no-flux z ghosts on a (ny+2, nz+2) plane, in place."""
+        if bc_y == 'wall':
+            p[0, :] = p[1, :]; p[ny + 1, :] = p[ny, :]
+        else:
+            p[0, :] = p[ny, :]; p[ny + 1, :] = p[1, :]
+        p[:, 0] = p[:, 1]; p[:, nz + 1] = p[:, nz]
+
+    # plane 1 (first interior x-cell) is the prescribed inlet; seed the inlet x-ghost too
+    c[1, :, :] = c_inlet
+    c[0, :, :] = c_inlet
+    fill_yz_ghost(c[1])
+
+    max_resid = 0.0
+    for ii in range(2, nx + 1):
+        u_cell = 0.5 * (u[ii - 1, 1:ny + 1, 1:nz + 1] + u[ii, 1:ny + 1, 1:nz + 1])
+        u_cell = u_cell.clamp(min=0.0)              # marching requires u >= 0
+        if ii == 2:                                  # BDF1 (only one upstream plane)
+            coef_x = u_cell / dx
+            src_x = coef_x * c[1, 1:ny + 1, 1:nz + 1]
+        else:                                        # BDF2 upwind
+            coef_x = 1.5 * u_cell / dx
+            src_x = (u_cell / dx) * (2.0 * c[ii - 1, 1:ny + 1, 1:nz + 1]
+                                     - 0.5 * c[ii - 2, 1:ny + 1, 1:nz + 1])
+        # Diagonals carry the streamwise term + BOTH cross-plane self-couplings; each ADI
+        # half-sweep makes one direction implicit and lags the other direction's neighbours.
+        b_z = coef_x + dce.view(1, nz) + (2.0 * D * inv_dy2)   # z-line diagonal (ny, nz)
+        b_y = (coef_x + dce.view(1, nz) + ydiag_self.view(ny, 1)).t().contiguous()  # y-line (nz, ny)
+
+        work = c[ii - 1].clone()                     # initial guess = upstream plane (ghosts incl.)
+        fill_yz_ghost(work)
+        vP = v[ii] if cross_adv else None
+        wP = w[ii] if cross_adv else None
+
+        def cross_term():
+            """Lagged conservative-central transverse advection div_yz(v c, w c), (ny, nz)."""
+            if not cross_adv:
+                return 0.0
+            ci = work[1:ny + 1, 1:nz + 1]
+            Gyr = vP[1:ny + 1, 1:nz + 1] * 0.5 * (ci + work[2:ny + 2, 1:nz + 1])
+            Gyl = vP[0:ny, 1:nz + 1] * 0.5 * (work[0:ny, 1:nz + 1] + ci)
+            Hzr = wP[1:ny + 1, 1:nz + 1] * 0.5 * (ci + work[1:ny + 1, 2:nz + 2])
+            Hzl = wP[1:ny + 1, 0:nz] * 0.5 * (work[1:ny + 1, 0:nz] + ci)
+            return (Gyr - Gyl) / dy + (Hzr - Hzl) / dzc
+
+        resid = 0.0
+        for _ in range(n_inner):
+            prev = work[1:ny + 1, 1:nz + 1].clone()
+            # --- z-implicit sweep (lag y-neighbours) ---
+            yneigh = (work[2:ny + 2, 1:nz + 1] + work[0:ny, 1:nz + 1]) * inv_dy2
+            rhs = src_x + D * yneigh - cross_term()
+            work[1:ny + 1, 1:nz + 1] = solve_tridiagonal_batch(a_z, b_z, cc_z, rhs.reshape(ny, nz))
+            fill_yz_ghost(work)
+            # --- y-implicit sweep (lag z-neighbours) ---
+            zneigh = (lo_z.view(1, nz) * work[1:ny + 1, 0:nz]
+                      + up_z.view(1, nz) * work[1:ny + 1, 2:nz + 2])
+            rhs = src_x + D * zneigh - cross_term()
+            sol = solve_tridiagonal_batch(a_y, b_y, cc_y, rhs.t().contiguous())   # batch over nz
+            work[1:ny + 1, 1:nz + 1] = sol.t()
+            fill_yz_ghost(work)
+            resid = float((work[1:ny + 1, 1:nz + 1] - prev).abs().max())
+            if resid < tol:
+                break
+        max_resid = max(max_resid, resid)
+        c[ii] = work
+    c[nx + 1, :, :] = c[nx, :, :]                    # zero-gradient outflow x-ghost
+    if verbose:
+        print(f"  [march] {nx} planes swept, max inner residual = {max_resid:.2e}", flush=True)
+    return c
+
+
+# ---------------------------------------------------------------------------
 # Koch fractal interface (cross-section)
 # ---------------------------------------------------------------------------
 def _zigzag_motif(r: float) -> np.ndarray:

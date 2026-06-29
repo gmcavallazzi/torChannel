@@ -430,6 +430,42 @@ incremental history+snapshot+final checkpointing; SLURM in `slurm/`):
   steady M(x), resolves the near-inlet N-dependence. dt=5e-4.
 Both at Sc=10, N=0..4. Results pending (jobs 277/278).
 
+## SPEEDUP — parabolic (space-marching) steady scalar solver (2026-06-29)
+
+The campaign and `run_frozen_scalar.py` compute a STEADY developing-duct field by marching
+the UNSTEADY scalar to steady state (~Pe pseudo-time steps; cost grows linearly with Sc, the
+wrong way for the high-Sc/high-N door). For a developing duct (`bc_x:'inout'`) with a steady,
+forward (u>0) frozen velocity, the steady scalar can instead be obtained in a SINGLE downstream
+sweep by dropping the (negligible at high Pe) streamwise-diffusion term: the balance
+`u dc/dx = D(d2_yy+d2_zz)c - (v d_y+w d_z)c` is then PARABOLIC in x and marches plane-by-plane.
+
+Implemented as an ADDITIVE option (reuses the batched tridiagonal solver and the same
+no-flux z-stencil; replaces nothing):
+- `scalar.march_scalar_steady(...)` — streamwise 2nd-order upwind (BDF2, low false diffusion);
+  cross-plane (y,z) diffusion by ALTERNATING-DIRECTION line relaxation (ADI: z-implicit then
+  y-implicit per sweep); transverse advection (central, weak) lagged. Returns the steady field.
+- `ChannelFlow.solve_scalar_parabolic(...)` — thin method alongside `advance_scalar` /
+  `advance_scalar_ssprk3`. Requires `bc_x='inout'`, `wall_bc='neumann'`.
+- `scripts/march_scalar.py` — driver (solve velocity to steady, freeze, ONE parabolic sweep);
+  writes a `{tag}_final.npz` in the campaign layout (Mx/x/scalar/u/chi_c) so the
+  plot_campaign_* scripts work; `--compare <final.npz>` validates Mx against an existing run.
+  (Also fixed `mixing_campaign.base_config` to accept `nx/ny/nz` — the ported
+  `run_frozen_scalar.py` already assumed this.)
+
+Validation (baffle, smooth pipe, v=w=0, frozen campaign velocity):
+- Sc=10, N=2: converged Mx matches the campaign to ~1% on L_mix (M=0.8: 1.13 vs 1.13; M=0.7:
+  3.04 vs 3.00). Mean conserved to 1e-6, c in [0,1] exactly.
+- Sc=100, N=2: converges in ~8 ADI sweeps (vs ~150 at Sc=10 — convergence is FAST at high Sc,
+  where the streamwise term dominates the diagonal; that is the regime the marcher is for).
+- The near-inlet / far-field differences vs the campaign are the campaign's OWN streamwise
+  numerical diffusion (1st-order-upwind-in-x at nx=192 gives false diffusion ~0.016 >> physical
+  D=2.5e-4); the parabolic marcher drops streamwise transport error by construction, so it is
+  the more faithful high-Pe solution. NOTE: low Sc needs many ADI sweeps (use the existing
+  time-march there — it is already cheap at low Pe); the marcher's win is the high-Sc/high-N door.
+
+This is the tool for the open N>=4 high-Sc test (needs a resolved cross-section ny=nz>=256):
+`python scripts/march_scalar.py --mode baffle --Sc 100 --N 4 --nx 256 --ny 256 --nz 256`.
+
 ## OVERALL CONCLUSION (torChannel, all accessible laminar regimes)
 L_mix(N)/L_mix(0) is FLAT (~1.0, never the proposed r^{-Df N}) across: plain duct Sc=1/16/100
 (0.98, Sc-independent to 5 sig figs), weak herringbone duct (1.00), AND a STRONG laminar
