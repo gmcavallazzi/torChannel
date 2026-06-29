@@ -154,12 +154,17 @@ def main():
         lm = _lmix(Mx, Lx, a.thr)
         print(f"  N={N}: {time.time()-t0:4.1f}s  M(out)={Mx[-1]:.4f}  c in[{cmin:.3f},{cmax:.3f}]  "
               f"L_mix(M={a.thr})={lm:.3f}", flush=True)
+        # lightweight output: Mx(x) (the result) + a mid-z (x,y) slice and a handful of
+        # (y,z) cross-sections for visualisation -- NOT the full 3D field (256^3 ~ 0.2 GB/N).
         tag = f"{a.mode}_Sc{int(a.Sc)}_N{N}_march"
-        np.savez(os.path.join(a.outdir, f"{tag}_final.npz"),
+        xs_idx = np.linspace(0, nx - 1, 6).astype(int)
+        np.savez(os.path.join(a.outdir, f"{tag}.npz"),
                  mode=a.mode, Sc=a.Sc, N=N, status='steady', method='parabolic', Lx=Lx,
-                 scalar=cc.detach().cpu().numpy(),
-                 chi_c=chi_f.detach().cpu().numpy(),
-                 Mx=Mx, x=np.linspace(0, Lx, len(Mx)))
+                 Mx=Mx, x=np.linspace(0, Lx, len(Mx)),
+                 c_xy=cc[:, :, nz // 2].detach().cpu().numpy(),               # (nx, ny) mid-z slice
+                 c_yz=cc[xs_idx].detach().cpu().numpy(),                      # (6, ny, nz)
+                 chi_yz=chi_f[xs_idx[0]].detach().cpu().numpy(),              # (ny, nz) wall mask
+                 xs=np.linspace(0, Lx, nx)[xs_idx])
         summary.append((N, lm))
 
     print("\n=== L_mix(N)/L_mix(0) summary (M={:.2f}) ===".format(a.thr), flush=True)
