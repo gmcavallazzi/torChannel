@@ -272,7 +272,8 @@ def march_scalar_steady(c_inlet: torch.Tensor, u: torch.Tensor, v: torch.Tensor,
                         dx: float, dy: float, dz_c: torch.Tensor, dz_f: torch.Tensor,
                         D: float, bc_y: str = 'wall', wall_bc: str = 'neumann',
                         cross_adv: bool = True, n_inner: int = 30,
-                        tol: float = 1e-9, verbose: bool = False) -> torch.Tensor:
+                        tol: float = 1e-9, verbose: bool = False,
+                        u_cc: torch.Tensor = None) -> torch.Tensor:
     """Parabolized space-marching STEADY passive-scalar solve for a developing duct.
 
     Solves the steady advection-diffusion balance with the STREAMWISE-DIFFUSION term
@@ -303,7 +304,11 @@ def march_scalar_steady(c_inlet: torch.Tensor, u: torch.Tensor, v: torch.Tensor,
 
     Args mirror the solver fields: c_inlet is the (ny+2, nz+2) inlet cross-section with
     ghosts (= ChannelFlow.c_inlet); u/v/w are the frozen MAC velocity (nx+2, ny+2, nz+2).
-    Returns the steady scalar field (nx+2, ny+2, nz+2) with ghosts filled.
+    Optionally pass `u_cc` (nx+2, ny+2, nz+2) to override the streamwise CELL-CENTRED
+    velocity directly (used in place of the x-face average of u) -- e.g. a velocity solved
+    on a coarser grid and interpolated onto this scalar grid (the smooth pipe flow is
+    well-resolved coarse; only the scalar needs the fine cross-section). Returns the steady
+    scalar field (nx+2, ny+2, nz+2) with ghosts filled.
     """
     if wall_bc != 'neumann':
         raise NotImplementedError("march_scalar_steady supports wall_bc='neumann' only")
@@ -347,7 +352,10 @@ def march_scalar_steady(c_inlet: torch.Tensor, u: torch.Tensor, v: torch.Tensor,
 
     max_resid = 0.0
     for ii in range(2, nx + 1):
-        u_cell = 0.5 * (u[ii - 1, 1:ny + 1, 1:nz + 1] + u[ii, 1:ny + 1, 1:nz + 1])
+        if u_cc is not None:
+            u_cell = u_cc[ii, 1:ny + 1, 1:nz + 1]
+        else:
+            u_cell = 0.5 * (u[ii - 1, 1:ny + 1, 1:nz + 1] + u[ii, 1:ny + 1, 1:nz + 1])
         u_cell = u_cell.clamp(min=0.0)              # marching requires u >= 0
         if ii == 2:                                  # BDF1 (only one upstream plane)
             coef_x = u_cell / dx
