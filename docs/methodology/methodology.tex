@@ -498,7 +498,7 @@ $N$ & {$L_{\mathrm{mix}}$} & {ratio}
 1 & 0.303 & 0.616 & 3.821 & 0.709 &  7.856 & 0.550 \\
 2 & 0.198 & 0.402 & 2.358 & 0.437 &  5.934 & 0.416 \\
 3 & 0.152 & 0.309 & 1.975 & 0.366 &  4.057 & 0.284 \\
-4 & 0.138 & 0.281 & 1.914 & 0.355 &  3.571 & 0.250 \\
+4 & 0.136 & 0.276 & 1.914 & 0.355 &  3.571 & 0.250 \\
 5 & {---} & {---}  & {---} & {---}  &  3.496 & 0.245 \\
 \bottomrule
 \end{tabular}
@@ -506,9 +506,7 @@ $N$ & {$L_{\mathrm{mix}}$} & {ratio}
 threshold) and its ratio to the flat $N=0$ baseline, baffle mode, $R=0.42$.
 $\Sc=10,100$ use $L_x=6$ and $M=0.9$; $\Sc=1000$ uses $L_x=18$ and a raised
 $M=0.95$ (the $\Pe$ is too high to reach $M=0.9$ within the domain --- a
-longer-domain sweep is planned). The $\Sc=10$, $N=4$ entry is the
-near-converged near-inlet value (time-march still running to the
-$1.2{\times}10^5$-step cap used by the other $N$).}
+longer-domain sweep is planned).}
 \label{tab:lmix}
 \end{table}
 
@@ -524,7 +522,7 @@ $1.2{\times}10^5$-step cap used by the other $N$).}
     grid style={gray!20},
 ]
 \addplot[black,thick,solid,mark=*] coordinates
-  {(0,1.000)(1,0.616)(2,0.402)(3,0.309)(4,0.281)};
+  {(0,1.000)(1,0.616)(2,0.402)(3,0.309)(4,0.276)};
 \addplot[black,thick,dashed,mark=square*] coordinates
   {(0,1.000)(1,0.709)(2,0.437)(3,0.366)(4,0.355)};
 \addplot[black,thick,dotted,mark=triangle*] coordinates
