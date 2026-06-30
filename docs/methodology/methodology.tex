@@ -473,11 +473,14 @@ for the baffle, at the three Schmidt numbers run. The $\Sc=100$ and
 $\Sc=1000$ data come from the parabolic marcher; the $\Sc=10$ data from a
 direct time-march to steady state (an independent cross-check of the
 marcher). Because $L_{\mathrm{mix}}$ grows with $\Pe$, the $\Sc=1000$
-sweep uses a longer domain ($L_x=18$ vs.\ $6$); even so the field does
-\emph{not} reach $M=0.9$ within the domain, so for that case the threshold
-is raised to $M=0.95$ (which all $N$ do cross) until longer-domain runs
-are available. The ratio $L_{\mathrm{mix}}(N)/L_{\mathrm{mix}}(0)$ is
-nearly threshold-independent, so the curves remain directly comparable.
+sweep uses a much longer domain ($L_x=90$ vs.\ $6$) so that all $N$ cross
+$M=0.9$ within it; the threshold is therefore the \emph{same} $M=0.9$ for
+every $\Sc$, an apples-to-apples comparison. The ratio
+$L_{\mathrm{mix}}(N)/L_{\mathrm{mix}}(0)$
+\emph{does} depend on the threshold --- it rises smoothly toward $1$ as
+$M$ is lowered (Figure~\ref{fig:thresh}) --- so every comparison here is
+made at a \emph{fixed} threshold; at fixed $M$ the $N$-ordering and trend
+are robust, and only the reported magnitude shifts with the choice of $M$.
 
 \begin{table}[h]
 \centering
@@ -488,25 +491,25 @@ nearly threshold-independent, so the curves remain directly comparable.
 \toprule
  & \multicolumn{2}{c}{$\Sc=10$ ($M{=}0.9$)}
  & \multicolumn{2}{c}{$\Sc=100$ ($M{=}0.9$)}
- & \multicolumn{2}{c}{$\Sc=1000$ ($M{=}0.95$)} \\
+ & \multicolumn{2}{c}{$\Sc=1000$ ($M{=}0.9$)} \\
 \cmidrule(lr){2-3}\cmidrule(lr){4-5}\cmidrule(lr){6-7}
 $N$ & {$L_{\mathrm{mix}}$} & {ratio}
     & {$L_{\mathrm{mix}}$} & {ratio}
     & {$L_{\mathrm{mix}}$} & {ratio} \\
 \midrule
-0 & 0.492 & 1.000 & 5.392 & 1.000 & 14.273 & 1.000 \\
-1 & 0.303 & 0.616 & 3.821 & 0.709 &  7.856 & 0.550 \\
-2 & 0.198 & 0.402 & 2.358 & 0.437 &  5.934 & 0.416 \\
-3 & 0.152 & 0.309 & 1.975 & 0.366 &  4.057 & 0.284 \\
-4 & 0.136 & 0.276 & 1.914 & 0.355 &  3.571 & 0.250 \\
-5 & {---} & {---}  & {---} & {---}  &  3.496 & 0.245 \\
+0 & 0.492 & 1.000 & 5.392 & 1.000 & 62.818 & 1.000 \\
+1 & 0.303 & 0.616 & 3.821 & 0.709 & 38.370 & 0.611 \\
+2 & 0.198 & 0.402 & 2.358 & 0.437 & 26.258 & 0.418 \\
+3 & 0.152 & 0.309 & 1.975 & 0.366 & 22.164 & 0.353 \\
+4 & 0.136 & 0.276 & 1.914 & 0.355 & 21.657 & 0.345 \\
+5 & {---} & {---}  & {---} & {---}  & 21.581 & 0.344 \\
 \bottomrule
 \end{tabular}
 \caption{Mixing length $L_{\mathrm{mix}}$ (station where $M(x)$ crosses the
 threshold) and its ratio to the flat $N=0$ baseline, baffle mode, $R=0.42$.
-$\Sc=10,100$ use $L_x=6$ and $M=0.9$; $\Sc=1000$ uses $L_x=18$ and a raised
-$M=0.95$ (the $\Pe$ is too high to reach $M=0.9$ within the domain --- a
-longer-domain sweep is planned).}
+All at the same threshold $M=0.9$; $\Sc=10,100$ use $L_x=6$, $\Sc=1000$
+uses $L_x=90$ (the longer domain the high-$\Pe$ field needs to reach
+$M=0.9$).}
 \label{tab:lmix}
 \end{table}
 
@@ -521,30 +524,46 @@ longer-domain sweep is planned).}
     legend pos=north east, grid=both,
     grid style={gray!20},
 ]
-\addplot[black,thick,solid,mark=*] coordinates
+\addplot[black,thick,solid,mark=o,mark size=3pt,mark options={solid}] coordinates
   {(0,1.000)(1,0.616)(2,0.402)(3,0.309)(4,0.276)};
-\addplot[black,thick,dashed,mark=square*] coordinates
+\addplot[black,thick,dashed,mark=square,mark size=3pt,mark options={solid}] coordinates
   {(0,1.000)(1,0.709)(2,0.437)(3,0.366)(4,0.355)};
-\addplot[black,thick,dotted,mark=triangle*] coordinates
-  {(0,1.000)(1,0.550)(2,0.416)(3,0.284)(4,0.250)(5,0.245)};
+\addplot[black,thick,dotted,mark=triangle,mark size=3.4pt,mark options={solid}] coordinates
+  {(0,1.000)(1,0.611)(2,0.418)(3,0.353)(4,0.345)(5,0.344)};
 % proposal Eq. 4: L_mix(N)/L_mix(0) = r^{-D_f N} = 4^{-N} (r=3, D_f=log4/log3)
 \addplot[gray,very thick,dash dot,mark=none,samples at={0,1,2,3,4,5}]
   {4^(-x)};
-\legend{$\Sc=10$ ($M{=}0.9$), $\Sc=100$ ($M{=}0.9$), $\Sc=1000$ ($M{=}0.95$),
+\legend{$\Sc=10$ ($M{=}0.9$), $\Sc=100$ ($M{=}0.9$), $\Sc=1000$ ($M{=}0.9$),
         proposal $r^{-\Df N}\!=\!4^{-N}$}
 \end{axis}
 \end{tikzpicture}
-\caption{Fractal mixing enhancement: the mixing length falls steeply with
-generation $N$. The enhancement \emph{strengthens with $\Sc$} --- the
-$\Sc=1000$ ratio reaches $0.25$ by $N=5$ --- and the onset of saturation
-moves to higher $N$ as $\Sc$ grows (the $\Sc=10$ curve is flat by $N=3$,
-while $\Sc=1000$ still improves from $N=4$ to $N=5$). Ratios are nearly
-threshold-independent. The grey dash-dotted line is the proposal's
-diffusive-limit prediction $r^{-\Df N}=4^{-N}$ (Eq.~4): the measured
-ratios decrease with $N$ but saturate well above it, i.e.\ the finite-$\Pe$
-duct realises part --- not all --- of the ideal exponential cut, and more
-of it as $\Sc$ increases.}
+\caption{Fractal mixing enhancement, all at a fixed threshold $M=0.9$: the
+mixing length falls with generation $N$ and saturates near $0.35$ by
+$N\!\approx\!3$, \emph{roughly independently of $\Sc$} (the three curves
+nearly overlap; $\Sc=100$ is marginally the weakest). The grey dash-dotted
+line is the proposal's diffusive-limit prediction $r^{-\Df N}=4^{-N}$
+(Eq.~4): the measured ratios fall well short of it --- the finite-$\Pe$
+duct realises only part of the ideal exponential cut. The ratio's
+magnitude depends on the threshold (Figure~\ref{fig:thresh}), but its
+$N$-ordering does not.}
 \label{fig:lmixN}
+\end{figure}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=\textwidth]{figures/baffle_ratio_vs_threshold.png}
+\caption{Threshold sensitivity of the ratio
+$L_{\mathrm{mix}}(N)/L_{\mathrm{mix}}(0)$: each curve is a generation $N$
+(colour as in Fig.~\ref{fig:mx}) swept over the mixedness threshold $M$.
+The ratio rises smoothly and \emph{monotonically} toward $1$ as $M$ is
+lowered --- it never flickers or reverses --- and the $N$-ordering is
+preserved at every $M$. The fractal advantage is therefore largest near
+the inlet (high $M$) and fades toward complete mixing, but the qualitative
+conclusions are threshold-independent; only the reported magnitude depends
+on the chosen $M$. ($\Sc=100$ spans only a narrow band here because its
+$L_x=6$ domain mixes to just $M\!\approx\!0.84$; a longer-domain run widens
+it to match the $\Sc=10$ range.)}
+\label{fig:thresh}
 \end{figure}
 
 The mechanism is visible directly in the cross-sections
@@ -571,10 +590,10 @@ the trend). Same $50/50$ split and smooth wall for every $N$.}
 \centering
 \includegraphics[width=\textwidth]{figures/baffle_Mx_double_Sc100_Sc1000.png}
 \caption{Segregation decay $M(x)$, generations $N$ overlaid, for $\Sc=100$
-($L_x=6$, left) and $\Sc=1000$ ($L_x=18$, right). Higher $N$ decays faster
-and further in both. At $\Sc=100$ the field crosses $M=0.9$ within the
-domain; at $\Sc=1000$ it does not, motivating the raised $M=0.95$ readout
-for the mixing length (Table~\ref{tab:lmix}).}
+($L_x=6$, left) and $\Sc=1000$ ($L_x=90$, right). Higher $N$ decays faster
+and further in both. Both cross $M=0.9$ within their domains, so the
+mixing length is read at the same threshold for every $\Sc$
+(Table~\ref{tab:lmix}).}
 \label{fig:mx}
 \end{figure}
 
@@ -583,30 +602,28 @@ for the mixing length (Table~\ref{tab:lmix}).}
 
 \begin{enumerate}\itemsep3pt
 \item \textbf{The fractal interface robustly shortens the mixing length,
-  and the effect grows with $\Sc$.} Folding the inlet interface to $N=3$
-  cuts $L_{\mathrm{mix}}$ to $0.31$, $0.37$ and $0.28$ of the flat
-  baseline at $\Sc=10$, $100$, $1000$ respectively; by $N=5$ at $\Sc=1000$
-  it reaches $0.25$ (a fourfold reduction) --- with the same volume split
-  and the same wall. This confirms, in a resolved laminar duct, the core
-  MERGE premise that interfacial \emph{area} (not bulk stirring) drives
-  the enhancement, and that it \emph{strengthens} toward the molecular
-  ($\Sc\sim10^3$) regime of interest.
-\item \textbf{Diminishing returns / a Schmidt-dependent optimal
-  generation.} Most of the gain is in the first folds ($N\!:0\!\to\!1\!\to\!2$);
-  the curve then flattens. Folds finer than the local diffusion length are
-  smeared by diffusion before they can laminate, so there is a finite
-  optimal generation $N^\ast$ beyond which extra folding does not pay ---
-  and $N^\ast$ \emph{grows with $\Sc$}: the $\Sc=10$ curve has largely
-  flattened by $N=3$--$4$, $\Sc=100$ still improves at $N=4$, and
-  $\Sc=1000$ still improves from $N=4$ to $N=5$. Higher $\Sc$ keeps finer folds effective,
-  so the proposal regime should reward deeper fractals.
+  roughly independently of $\Sc$.} At a fixed threshold ($M=0.9$), folding
+  to $N=3$ cuts $L_{\mathrm{mix}}$ to $0.31$, $0.37$ and $0.35$ of the flat
+  baseline at $\Sc=10$, $100$, $1000$ --- a $\sim\!3\times$ reduction that
+  saturates near $0.35$ for $N\ge3$ at every $\Sc$, with the same volume
+  split and the same wall. This confirms, in a resolved laminar duct, the
+  core MERGE premise that interfacial \emph{area} (not bulk stirring)
+  drives the enhancement. (At a \emph{common} threshold there is no clear
+  monotone $\Sc$-trend --- the apparent strengthening with $\Sc$ in
+  earlier mixed-threshold readings was a threshold artifact, see
+  Fig.~\ref{fig:thresh}.)
+\item \textbf{Diminishing returns.} Most of the gain is in the first folds
+  ($N\!:0\!\to\!1\!\to\!2$); the ratio then flattens, saturating by
+  $N\!\approx\!3$--$4$ at every $\Sc$ (e.g.\ $\Sc=1000$ gives
+  $0.42,\,0.35,\,0.345,\,0.344$ at $N=2,3,4,5$). Folds finer than the
+  local diffusion length are smeared away before they can laminate, so
+  deeper fractals stop paying off.
 \item \textbf{$L_{\mathrm{mix}}$ scales steeply with $\Pe$.}
-  The $N=0$ baseline grows $0.49\!\to\!5.4\!\to\!{>}18$ (at $M=0.9$;
-  $14.3$ at the raised $M=0.95$) for $\Sc=10\!\to\!100\!\to\!1000$ ---
-  roughly a decade per decade of $\Sc$. This is why a high-$\Sc$ run needs
-  a long domain and many pseudo-time steps, and is the direct motivation
-  for the parabolic-marcher / frozen-velocity acceleration of
-  Section~\ref{sec:accel}.
+  The $N=0$ baseline grows $0.49\!\to\!5.4\!\to\!63$ for
+  $\Sc=10\!\to\!100\!\to\!1000$ (all at $M=0.9$) --- about a decade per
+  decade of $\Sc$. This is why a high-$\Sc$ run needs a long domain, and is
+  the direct motivation for the parabolic-marcher / frozen-velocity
+  acceleration of Section~\ref{sec:accel}.
 \item \textbf{Interfacial folding dominates over wall roughness.} The
   \emph{surface\_baffle} (Koch folds added to the pipe \emph{wall}) gives
   a weaker reduction than the interface baffle at equal $N$ (e.g.\ at
@@ -621,16 +638,15 @@ for the mixing length (Table~\ref{tab:lmix}).}
   runs in minutes per generation.
 \end{enumerate}
 
-\paragraph{Caveats.} The $\Sc=10$ values come from a time-march (some
-cases stopped at the step cap, not fully steady) while $\Sc=100$ and
-$\Sc=1000$ use the parabolic marcher, so cross-$\Sc$ comparisons are
-indicative rather than exact. At $\Sc=1000$ the domain $L_x=18$ is too
-short to reach $M=0.9$, so $L_{\mathrm{mix}}$ there is reported at the
-\emph{raised} threshold $M=0.95$ (crossed by all $N$); a longer-domain
-sweep --- planned --- will let it be quoted at the same $M=0.9$ as the
-other cases. The configuration and generator diagrams
-(Figs.~\ref{fig:setup}, \ref{fig:koch}) are schematic; the quantitative
-figures (Figs.~\ref{fig:lmixN}, \ref{fig:xsec}, \ref{fig:mx}) are
-computed results.
+\paragraph{Caveats.} All ratios are quoted at a common $M=0.9$. The
+$\Sc=10$ values come from a time-march on a coarse grid (some cases
+stopped at the step cap, not fully steady) while $\Sc=100$ and $\Sc=1000$
+use the parabolic marcher on fine grids, so cross-$\Sc$ comparisons are
+indicative rather than exact --- in particular the $\Sc=10$ ratios sit
+slightly below the marcher cases and should not be over-read as a trend.
+The configuration and generator diagrams (Figs.~\ref{fig:setup},
+\ref{fig:koch}) are schematic; the quantitative figures
+(Figs.~\ref{fig:lmixN}, \ref{fig:thresh}, \ref{fig:xsec}, \ref{fig:mx})
+are computed results.
 
 \end{document}
