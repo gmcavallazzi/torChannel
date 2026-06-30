@@ -97,11 +97,11 @@ def main():
             ax.text(0.99, 0.99, r"$M{=}%.2f$" % float(d['Mx'][np.argmin(np.abs(d['x'] - xs[ci]))]),
                     transform=ax.transAxes, ha='right', va='top', fontsize=9)
             if ri == 0:
-                ax.set_title(r"$x=%.1f$" % xs[ci])
+                ax.set_title(r"$x=%.1f$" % xs[ci], fontsize=15)
             if ci == 0:
-                ax.set_ylabel(r"$N=%d$" % N, fontsize=12)
-    fig.suptitle(r"Sc$=%d$ baffle: $c(y,z)$" % int(a.Sc), y=0.99)
-    fig.tight_layout(rect=[0, 0, 1, 0.97])
+                ax.set_ylabel(r"$N=%d$" % N, fontsize=16)
+    fig.suptitle(r"Sc$=%d$ baffle: $c(y,z)$" % int(a.Sc), y=1.0, fontsize=30)
+    fig.tight_layout(rect=[0, 0, 1, 0.96])
     o2 = os.path.join(outdir, f"{a.mode}_Sc{int(a.Sc)}_xsections_march.png")
     fig.savefig(o2, dpi=150, bbox_inches='tight'); print("wrote", o2)
 

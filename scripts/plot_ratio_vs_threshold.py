@@ -35,7 +35,7 @@ def panel(ax, indir, Sc, kind, Ns, Mlo, Mhi, ncol=1):
         ok = np.isfinite(r)
         ax.plot(M[ok], r[ok], '-', color=cmap(N / max(Ns)), lw=1.9, label=r"$N=%d$" % N)
     ax.set_xlabel(r"threshold $M$")
-    ax.set_title(r"$Sc=%d$" % Sc)
+    ax.set_title(r"$Sc=%d$" % Sc, fontsize=22)
     ax.set_ylim(0, 1.02)
     ax.grid(True, ls=':', lw=0.6, alpha=0.7)
     ax.legend(frameon=False, fontsize=12, loc='lower left', ncol=ncol)
