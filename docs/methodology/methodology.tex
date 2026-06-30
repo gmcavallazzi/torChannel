@@ -527,7 +527,11 @@ longer-domain sweep is planned).}
   {(0,1.000)(1,0.709)(2,0.437)(3,0.366)(4,0.355)};
 \addplot[black,thick,dotted,mark=triangle*] coordinates
   {(0,1.000)(1,0.550)(2,0.416)(3,0.284)(4,0.250)(5,0.245)};
-\legend{$\Sc=10$ ($M{=}0.9$), $\Sc=100$ ($M{=}0.9$), $\Sc=1000$ ($M{=}0.95$)}
+% proposal Eq. 4: L_mix(N)/L_mix(0) = r^{-D_f N} = 4^{-N} (r=3, D_f=log4/log3)
+\addplot[gray,very thick,dash dot,mark=none,samples at={0,1,2,3,4,5}]
+  {4^(-x)};
+\legend{$\Sc=10$ ($M{=}0.9$), $\Sc=100$ ($M{=}0.9$), $\Sc=1000$ ($M{=}0.95$),
+        proposal $r^{-\Df N}\!=\!4^{-N}$}
 \end{axis}
 \end{tikzpicture}
 \caption{Fractal mixing enhancement: the mixing length falls steeply with
@@ -535,7 +539,11 @@ generation $N$. The enhancement \emph{strengthens with $\Sc$} --- the
 $\Sc=1000$ ratio reaches $0.25$ by $N=5$ --- and the onset of saturation
 moves to higher $N$ as $\Sc$ grows (the $\Sc=10$ curve is flat by $N=3$,
 while $\Sc=1000$ still improves from $N=4$ to $N=5$). Ratios are nearly
-threshold-independent.}
+threshold-independent. The grey dash-dotted line is the proposal's
+diffusive-limit prediction $r^{-\Df N}=4^{-N}$ (Eq.~4): the measured
+ratios decrease with $N$ but saturate well above it, i.e.\ the finite-$\Pe$
+duct realises part --- not all --- of the ideal exponential cut, and more
+of it as $\Sc$ increases.}
 \label{fig:lmixN}
 \end{figure}
 
