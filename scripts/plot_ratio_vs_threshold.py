@@ -49,7 +49,7 @@ def main():
     os.makedirs(a.outdir, exist_ok=True)
     fig, axs = plt.subplots(1, 2, figsize=(11.0, 4.4))
     panel(axs[0], a.indir, 10,  'final', [1, 2, 3, 4], 0.655, 0.925)
-    panel(axs[1], a.indir, 100, 'march', [1, 2, 3, 4], 0.905, 0.965)
+    panel(axs[1], a.indir, 100, 'march', [1, 2, 3, 4], 0.655, 0.925)
     axs[0].set_ylabel(r"$L_{\mathrm{mix}}(N)/L_{\mathrm{mix}}(0)$")
     fig.tight_layout()
     o = os.path.join(a.outdir, "baffle_ratio_vs_threshold.png")

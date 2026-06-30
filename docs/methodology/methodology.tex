@@ -472,10 +472,11 @@ $L_{\mathrm{mix}}$ (the station where $M(x)$ first crosses the threshold)
 for the baffle, at the three Schmidt numbers run. The $\Sc=100$ and
 $\Sc=1000$ data come from the parabolic marcher; the $\Sc=10$ data from a
 direct time-march to steady state (an independent cross-check of the
-marcher). Because $L_{\mathrm{mix}}$ grows with $\Pe$, the $\Sc=1000$
-sweep uses a much longer domain ($L_x=90$ vs.\ $6$) so that all $N$ cross
-$M=0.9$ within it; the threshold is therefore the \emph{same} $M=0.9$ for
-every $\Sc$, an apples-to-apples comparison. The ratio
+marcher). Because $L_{\mathrm{mix}}$ grows with $\Pe$, the higher-$\Sc$
+sweeps use longer domains ($L_x=6,72,90$ for $\Sc=10,100,1000$) so that
+all $N$ cross $M=0.9$ within them; the threshold is therefore the
+\emph{same} $M=0.9$ for every $\Sc$, an apples-to-apples comparison. The
+ratio
 $L_{\mathrm{mix}}(N)/L_{\mathrm{mix}}(0)$
 \emph{does} depend on the threshold --- it rises smoothly toward $1$ as
 $M$ is lowered (Figure~\ref{fig:thresh}) --- so every comparison here is
@@ -497,19 +498,19 @@ $N$ & {$L_{\mathrm{mix}}$} & {ratio}
     & {$L_{\mathrm{mix}}$} & {ratio}
     & {$L_{\mathrm{mix}}$} & {ratio} \\
 \midrule
-0 & 0.492 & 1.000 & 5.392 & 1.000 & 62.818 & 1.000 \\
-1 & 0.303 & 0.616 & 3.821 & 0.709 & 38.370 & 0.611 \\
-2 & 0.198 & 0.402 & 2.358 & 0.437 & 26.258 & 0.418 \\
-3 & 0.152 & 0.309 & 1.975 & 0.366 & 22.164 & 0.353 \\
-4 & 0.136 & 0.276 & 1.914 & 0.355 & 21.657 & 0.345 \\
+0 & 0.492 & 1.000 & 5.490 & 1.000 & 62.818 & 1.000 \\
+1 & 0.303 & 0.616 & 3.811 & 0.694 & 38.370 & 0.611 \\
+2 & 0.198 & 0.402 & 2.385 & 0.434 & 26.258 & 0.418 \\
+3 & 0.152 & 0.309 & 1.998 & 0.364 & 22.164 & 0.353 \\
+4 & 0.136 & 0.276 & 1.936 & 0.353 & 21.657 & 0.345 \\
 5 & {---} & {---}  & {---} & {---}  & 21.581 & 0.344 \\
 \bottomrule
 \end{tabular}
 \caption{Mixing length $L_{\mathrm{mix}}$ (station where $M(x)$ crosses the
 threshold) and its ratio to the flat $N=0$ baseline, baffle mode, $R=0.42$.
-All at the same threshold $M=0.9$; $\Sc=10,100$ use $L_x=6$, $\Sc=1000$
-uses $L_x=90$ (the longer domain the high-$\Pe$ field needs to reach
-$M=0.9$).}
+All at the same threshold $M=0.9$. The domain is sized so each field
+decays well past the threshold: $\Sc=10$ uses $L_x=6$, $\Sc=100$ uses
+$L_x=72$, $\Sc=1000$ uses $L_x=90$ (longer domains for the higher $\Pe$).}
 \label{tab:lmix}
 \end{table}
 
@@ -527,7 +528,7 @@ $M=0.9$).}
 \addplot[black,thick,solid,mark=o,mark size=3pt,mark options={solid}] coordinates
   {(0,1.000)(1,0.616)(2,0.402)(3,0.309)(4,0.276)};
 \addplot[black,thick,dashed,mark=square,mark size=3pt,mark options={solid}] coordinates
-  {(0,1.000)(1,0.709)(2,0.437)(3,0.366)(4,0.355)};
+  {(0,1.000)(1,0.694)(2,0.434)(3,0.364)(4,0.353)};
 \addplot[black,thick,dotted,mark=triangle,mark size=3.4pt,mark options={solid}] coordinates
   {(0,1.000)(1,0.611)(2,0.418)(3,0.353)(4,0.345)(5,0.344)};
 % proposal Eq. 4: L_mix(N)/L_mix(0) = r^{-D_f N} = 4^{-N} (r=3, D_f=log4/log3)
@@ -560,9 +561,8 @@ lowered --- it never flickers or reverses --- and the $N$-ordering is
 preserved at every $M$. The fractal advantage is therefore largest near
 the inlet (high $M$) and fades toward complete mixing, but the qualitative
 conclusions are threshold-independent; only the reported magnitude depends
-on the chosen $M$. ($\Sc=100$ spans only a narrow band here because its
-$L_x=6$ domain mixes to just $M\!\approx\!0.84$; a longer-domain run widens
-it to match the $\Sc=10$ range.)}
+on the chosen $M$. Over the same range the $\Sc=10$ and $\Sc=100$ panels
+have nearly the same shape, confirming the behaviour is not $\Sc$-specific.}
 \label{fig:thresh}
 \end{figure}
 
@@ -590,7 +590,7 @@ the trend). Same $50/50$ split and smooth wall for every $N$.}
 \centering
 \includegraphics[width=\textwidth]{figures/baffle_Mx_double_Sc100_Sc1000.png}
 \caption{Segregation decay $M(x)$, generations $N$ overlaid, for $\Sc=100$
-($L_x=6$, left) and $\Sc=1000$ ($L_x=90$, right). Higher $N$ decays faster
+($L_x=72$, left) and $\Sc=1000$ ($L_x=90$, right). Higher $N$ decays faster
 and further in both. Both cross $M=0.9$ within their domains, so the
 mixing length is read at the same threshold for every $\Sc$
 (Table~\ref{tab:lmix}).}
@@ -603,7 +603,7 @@ mixing length is read at the same threshold for every $\Sc$
 \begin{enumerate}\itemsep3pt
 \item \textbf{The fractal interface robustly shortens the mixing length,
   roughly independently of $\Sc$.} At a fixed threshold ($M=0.9$), folding
-  to $N=3$ cuts $L_{\mathrm{mix}}$ to $0.31$, $0.37$ and $0.35$ of the flat
+  to $N=3$ cuts $L_{\mathrm{mix}}$ to $0.31$, $0.36$ and $0.35$ of the flat
   baseline at $\Sc=10$, $100$, $1000$ --- a $\sim\!3\times$ reduction that
   saturates near $0.35$ for $N\ge3$ at every $\Sc$, with the same volume
   split and the same wall. This confirms, in a resolved laminar duct, the
@@ -619,7 +619,7 @@ mixing length is read at the same threshold for every $\Sc$
   local diffusion length are smeared away before they can laminate, so
   deeper fractals stop paying off.
 \item \textbf{$L_{\mathrm{mix}}$ scales steeply with $\Pe$.}
-  The $N=0$ baseline grows $0.49\!\to\!5.4\!\to\!63$ for
+  The $N=0$ baseline grows $0.49\!\to\!5.5\!\to\!63$ for
   $\Sc=10\!\to\!100\!\to\!1000$ (all at $M=0.9$) --- about a decade per
   decade of $\Sc$. This is why a high-$\Sc$ run needs a long domain, and is
   the direct motivation for the parabolic-marcher / frozen-velocity
