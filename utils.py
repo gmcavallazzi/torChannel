@@ -1,4 +1,5 @@
 import os
+import math
 import torch
 import matplotlib.pyplot as plt
 
@@ -107,6 +108,115 @@ def generate_hybrid_grid(nz_uniform, nz_stretched, z_transition, Lz, gamma, devi
     # Validate monotonicity
     if torch.any(dz_f <= 0):
         raise ValueError("Non-positive cell spacing detected in hybrid grid!")
+    if torch.any(z_f[1:] <= z_f[:-1]):
+        raise ValueError("Non-monotonic grid detected!")
+
+    return z_f, z_c, dz_f, dz_c
+
+def generate_double_stretched_grid(nz_canopy, nz_outer, z_transition, Lz,
+                                   gamma_canopy, gamma_outer, device='cpu'):
+    """
+    Generate double-stretched grid for canopy flows: tanh clustering at BOTH
+    the canopy bed (z=0) and the filament tips (z=z_transition), where the
+    highest shear is expected, plus one-sided stretching above the canopy
+    (fine at the tips, coarse at the top boundary).
+
+    Follows Monti et al. (2022): "two tangent-hyperbolic functions that
+    concentrate the nodes ... at the edge of the canopy layer and close to
+    the solid wall".
+
+    Args:
+        nz_canopy: Number of cells in canopy region [0, z_transition]
+        nz_outer: Number of cells in outer region [z_transition, Lz]
+        z_transition: Canopy height h
+        Lz: Total domain height
+        gamma_canopy: Stretching parameter inside the canopy (symmetric tanh,
+                      higher = stronger clustering at bed and tips)
+        gamma_outer: Stretching parameter above the canopy (one-sided tanh,
+                     higher = stronger clustering at the tips), or 'auto' to
+                     solve for C1 continuity at the transition (recommended)
+        device: Device for tensor allocation
+
+    Returns:
+        z_f: Face coordinates (nz_canopy + nz_outer + 1 points)
+        z_c: Cell center coordinates (nz_canopy + nz_outer + 2 points, includes ghost cells)
+        dz_f: Face spacing (nz_canopy + nz_outer points)
+        dz_c: Center spacing (nz_canopy + nz_outer + 1 points)
+    """
+    # Region 1: canopy [0, z_transition], symmetric tanh (cluster at both ends)
+    k_c = torch.linspace(0, nz_canopy, nz_canopy + 1, device=device)
+    xi_c = (2 * k_c / nz_canopy) - 1  # xi ∈ [-1, 1]
+    gamma_c = torch.tensor(gamma_canopy, device=device)
+    z_f_canopy = 0.5 * z_transition * (1 + torch.tanh(gamma_c * xi_c) / torch.tanh(gamma_c))
+
+    # Region 2: outer [z_transition, Lz], one-sided tanh (fine at tips, coarse at top)
+    H_outer = Lz - z_transition
+    k_o = torch.linspace(0, nz_outer, nz_outer + 1, device=device)
+    xi_o = k_o / nz_outer  # xi ∈ [0, 1]
+
+    if gamma_outer == 'auto':
+        # Solve for the gamma that makes the first outer spacing equal the
+        # last canopy spacing (C1 continuity). The first spacing
+        # H_outer * (1 - tanh(g*(1-1/nz))/tanh(g)) decreases monotonically
+        # with g, so bisection is safe.
+        target = (z_f_canopy[-1] - z_f_canopy[-2]).item()
+
+        def first_spacing(g):
+            return H_outer * (1.0 - math.tanh(g * (1.0 - 1.0/nz_outer)) / math.tanh(g))
+
+        g_lo, g_hi = 1e-3, 20.0
+        if first_spacing(g_lo) < target:
+            raise ValueError(
+                f"Cannot match dz={target:.3e} at the transition: even gamma_outer→0 "
+                f"gives {first_spacing(g_lo):.3e}. Increase nz_outer or gamma_canopy.")
+        for _ in range(100):
+            g_mid = 0.5 * (g_lo + g_hi)
+            if first_spacing(g_mid) > target:
+                g_lo = g_mid
+            else:
+                g_hi = g_mid
+        gamma_outer = 0.5 * (g_lo + g_hi)
+        print(f"  gamma_outer='auto' resolved to {gamma_outer:.6f}", flush=True)
+
+    gamma_o = torch.tensor(gamma_outer, device=device)
+    z_f_outer = H_outer * (1.0 - torch.tanh(gamma_o * (1.0 - xi_o)) / torch.tanh(gamma_o))
+
+    # Concatenate (skip duplicate face at the transition)
+    z_f = torch.cat([z_f_canopy, z_transition + z_f_outer[1:]])
+
+    # Cell centers and spacings (same procedure as generate_grid)
+    z_c_inn = 0.5 * (z_f[:-1] + z_f[1:])
+    z_c = torch.cat([torch.tensor([-z_c_inn[0]], device=device), z_c_inn,
+                     torch.tensor([2*z_f[-1] - z_c_inn[-1]], device=device)])
+
+    dz_f = z_f[1:] - z_f[:-1]  # Length nz_canopy + nz_outer
+    dz_c = z_c[1:] - z_c[:-1]  # Length nz_canopy + nz_outer + 1
+
+    # Diagnostics: spacings at the shear-critical locations
+    dz_bed = dz_f[0].item()
+    dz_tip_below = dz_f[nz_canopy - 1].item()
+    dz_tip_above = dz_f[nz_canopy].item()
+    dz_max_canopy = dz_f[:nz_canopy].max().item()
+    dz_max_outer = dz_f[nz_canopy:].max().item()
+    print(f"Double-stretched grid:", flush=True)
+    print(f"  Canopy [0, {z_transition}]: nz={nz_canopy}, gamma={gamma_canopy}, "
+          f"dz_bed={dz_bed:.3e}, dz_tip={dz_tip_below:.3e}, dz_max={dz_max_canopy:.3e}", flush=True)
+    print(f"  Outer  [{z_transition}, {Lz}]: nz={nz_outer}, gamma={gamma_outer}, "
+          f"dz_tip={dz_tip_above:.3e}, dz_max={dz_max_outer:.3e}", flush=True)
+
+    # C1 continuity check at the transition (same criterion as hybrid grid)
+    discontinuity = abs(dz_tip_above - dz_tip_below) / dz_tip_below
+    if discontinuity > 0.01:
+        print(f"WARNING: C1 discontinuity at z={z_transition:.4f}:", flush=True)
+        print(f"  dz below = {dz_tip_below:.6e}", flush=True)
+        print(f"  dz above = {dz_tip_above:.6e}", flush=True)
+        print(f"  Relative jump = {discontinuity*100:.2f}%", flush=True)
+        print(f"  Consider adjusting gamma_canopy/gamma_outer", flush=True)
+    else:
+        print(f"  C1 continuity at z={z_transition}: {discontinuity*100:.3f}% (OK)", flush=True)
+
+    if torch.any(dz_f <= 0):
+        raise ValueError("Non-positive cell spacing detected in double-stretched grid!")
     if torch.any(z_f[1:] <= z_f[:-1]):
         raise ValueError("Non-monotonic grid detected!")
 

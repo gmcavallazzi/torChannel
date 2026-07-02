@@ -211,6 +211,25 @@ class ChannelFlow:
             # Update nz to match actual grid size
             self.nz = len(self.dz_f)
             print(f"  Total grid cells: {self.nz}", flush=True)
+        elif self.stretching_type == 'double':
+            # Double-stretched canopy grid: clustering at the bed AND at the
+            # canopy tips (z_transition), one-sided stretching above
+            from utils import generate_double_stretched_grid
+
+            nz_canopy = config['grid'].get('nz_canopy', 100)
+            nz_outer = config['grid'].get('nz_outer', 200)
+            z_transition = config['domain'].get('z_transition', 0.25)
+            gamma_canopy = config['domain'].get('gamma_canopy', 2.0)
+            gamma_outer = config['domain'].get('gamma_outer', 'auto')
+
+            self.z_f, self.z_c, self.dz_f, self.dz_c = generate_double_stretched_grid(
+                nz_canopy, nz_outer, z_transition, self.Lz,
+                gamma_canopy, gamma_outer, device=self.device
+            )
+
+            # Update nz to match actual grid size
+            self.nz = len(self.dz_f)
+            print(f"  Total grid cells: {self.nz}", flush=True)
         else:
             self.z_f, self.z_c, self.dz_f, self.dz_c = generate_grid(
                 self.gamma, self.nz, self.Lz,
