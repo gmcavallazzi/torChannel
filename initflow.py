@@ -1,6 +1,110 @@
 import torch
 from utils import load_flow_fields
 
+
+def _interp1d_weights(coords, nodes):
+    """Linear interpolation indices/weights of query coords into 1-D sorted nodes.
+    Queries outside the node range are clamped (constant extrapolation)."""
+    k = torch.searchsorted(nodes, coords).clamp(1, len(nodes) - 1)
+    k0 = k - 1
+    denom = (nodes[k] - nodes[k0]).clamp(min=1e-300)
+    t = ((coords - nodes[k0]) / denom).clamp(0.0, 1.0)
+    return k0, t
+
+
+def _trilinear(field, x_nodes, y_nodes, z_nodes, xq, yq, zq):
+    """Trilinear interpolation of field (len(x_nodes), len(y_nodes), len(z_nodes))
+    onto the tensor-product query points xq, yq, zq. Returns (len(xq), len(yq), len(zq))."""
+    ix, tx = _interp1d_weights(xq, x_nodes)
+    iy, ty = _interp1d_weights(yq, y_nodes)
+    iz, tz = _interp1d_weights(zq, z_nodes)
+    out = torch.zeros(len(xq), len(yq), len(zq), dtype=field.dtype, device=field.device)
+    for a in (0, 1):
+        wx = (tx if a else 1.0 - tx).view(-1, 1, 1)
+        for b in (0, 1):
+            wy = (ty if b else 1.0 - ty).view(1, -1, 1)
+            for c in (0, 1):
+                wz = (tz if c else 1.0 - tz).view(1, 1, -1)
+                out += wx * wy * wz * field[ix + a][:, iy + b][:, :, iz + c]
+    return out
+
+
+def initialize_flow_interpolated(field_file, nx, ny, nz, Lx, Ly, Lz, z_c, z_f,
+                                 device='cpu', source_half='lower'):
+    """
+    Initialize the flow by interpolating a previously saved turbulent field
+    (possibly on a DIFFERENT grid/domain) onto the current staggered grid.
+
+    The source grid is fully recovered from the npz file (z_c/z_f arrays, Lx/Ly
+    and the array shapes; x/y are uniform). Staggered-aware trilinear
+    interpolation per component, periodic in x/y via the source ghost layers.
+    If the source domain is wider/longer, the target box is mapped
+    proportionally onto it; if it is taller (full channel -> open channel),
+    the lower part of the source is used (source_half='lower').
+
+    The caller must rescale to the target bulk velocity, re-apply boundary
+    conditions and project (the solver's init already does all three).
+
+    Returns u, v, w, p on the target grid (p is zero; the initial projection
+    rebuilds it). Time/step should be reset by the caller.
+    """
+    print(f"Interpolating initial field from: {field_file}", flush=True)
+    src = load_flow_fields(field_file, device=device)
+    u_s, v_s, w_s = src['u'], src['v'], src['w']
+    z_c_s, z_f_s = src['z_c'], src['z_f']
+    Lx_s, Ly_s = float(src['Lx']), float(src['Ly'])
+    nxs, nys = u_s.shape[0] - 1, v_s.shape[1] - 1
+    nzs = len(z_f_s) - 1
+    Lz_s = float(z_f_s[-1])
+    dxs, dys = Lx_s / nxs, Ly_s / nys
+
+    if source_half != 'lower' and Lz_s > Lz:
+        raise ValueError(f"source_half='{source_half}' not supported (only 'lower')")
+    print(f"  source: {nxs}x{nys}x{nzs}, L = ({Lx_s:.4f}, {Ly_s:.4f}, {Lz_s:.4f})", flush=True)
+    print(f"  target: {nx}x{ny}x{nz}, L = ({Lx:.4f}, {Ly:.4f}, {Lz:.4f})"
+          + (f" [lower {Lz/Lz_s:.2f} of source height]" if Lz_s > Lz else ""), flush=True)
+
+    # Refresh periodic ghost layers of the source (cheap insurance; z ghosts
+    # are re-applied by the loader already)
+    u_s[0, :, :] = u_s[-1, :, :]
+    u_s[:, 0, :] = u_s[:, -2, :]; u_s[:, -1, :] = u_s[:, 1, :]
+    v_s[0, :, :] = v_s[-2, :, :]; v_s[-1, :, :] = v_s[1, :, :]
+    v_s[:, 0, :] = v_s[:, -1, :]
+    w_s[0, :, :] = w_s[-2, :, :]; w_s[-1, :, :] = w_s[1, :, :]
+    w_s[:, 0, :] = w_s[:, -2, :]; w_s[:, -1, :] = w_s[:, 1, :]
+
+    # Source node coordinates (full arrays incl. ghosts/duplicates, so the
+    # periodic wrap is covered by construction: faces span [0, L], centers
+    # span [-dx/2, L+dx/2])
+    dev, dt = u_s.device, u_s.dtype
+    x_face_s = torch.arange(nxs + 1, dtype=dt, device=dev) * dxs
+    x_cent_s = (torch.arange(nxs + 2, dtype=dt, device=dev) - 0.5) * dxs
+    y_face_s = torch.arange(nys + 1, dtype=dt, device=dev) * dys
+    y_cent_s = (torch.arange(nys + 2, dtype=dt, device=dev) - 0.5) * dys
+
+    # Target node coordinates: map x/y proportionally onto the source domain
+    # (handles different Lx/Ly by stretching the periodic box), z directly
+    # (source_half='lower': target z already addresses the lower source region)
+    dx, dy = Lx / nx, Ly / ny
+    rx, ry = Lx_s / Lx, Ly_s / Ly
+    x_face_t = torch.arange(nx + 1, dtype=dt, device=dev) * dx * rx
+    x_cent_t = ((torch.arange(nx + 2, dtype=dt, device=dev) - 0.5) * dx * rx)
+    y_face_t = torch.arange(ny + 1, dtype=dt, device=dev) * dy * ry
+    y_cent_t = ((torch.arange(ny + 2, dtype=dt, device=dev) - 0.5) * dy * ry)
+    # clamp x/y ghost coords into the source coordinate span (periodicity is
+    # honoured because the span includes both images of the seam)
+    x_cent_t = x_cent_t.clamp(x_cent_s[0], x_cent_s[-1])
+    y_cent_t = y_cent_t.clamp(y_cent_s[0], y_cent_s[-1])
+
+    u = _trilinear(u_s, x_face_s, y_cent_s, z_c_s, x_face_t, y_cent_t, z_c.to(dev))
+    v = _trilinear(v_s, x_cent_s, y_face_s, z_c_s, x_cent_t, y_face_t, z_c.to(dev))
+    w = _trilinear(w_s, x_cent_s, y_cent_s, z_f_s, x_cent_t, y_cent_t, z_f.to(dev))
+    p = torch.zeros(nx + 2, ny + 2, nz + 2, dtype=dt, device=dev)
+
+    print(f"  interpolated: u in [{u.min().item():.4f}, {u.max().item():.4f}]", flush=True)
+    return u.contiguous(), v.contiguous(), w.contiguous(), p
+
+
 def initialize_flow(nx, ny, nz, z_c, Ly, Lz, U_bulk=1.0, init_type='parabolic', perturbation_intensity=0.0, n_vortices=4, device='cpu', top_wall_bc_type='dirichlet'):
     """Initialize velocity and pressure fields. Creates tensors on specified device (CPU or CUDA)."""
     u = torch.zeros(nx+1, ny+2, nz+2, device=device)

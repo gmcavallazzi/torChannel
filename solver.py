@@ -159,7 +159,10 @@ class ChannelFlow:
 
         # Check if we're restarting from a file
         field_file = config['initialization'].get('field_file', None)
-        is_restart = field_file is not None
+        # 'interpolate' loads a field from a DIFFERENT grid as a fresh start,
+        # not a restart (time resets, results folder treated as fresh)
+        init_type_cfg = config['initialization'].get('type', 'parabolic')
+        is_restart = field_file is not None and init_type_cfg != 'interpolate'
 
         # Check if we're restarting statistics from a file
         stats_config = config.get('statistics', {})
@@ -267,6 +270,21 @@ class ChannelFlow:
             self.u, self.v, self.w, self.p, self.initial_step, self.time = initialize_flow_from_file(field_file, device=self.device, reset_time=reset_time)
             self.initial_time = self.time
             self.forcing = 0.0
+        elif config['initialization']['type'] == 'interpolate':
+            if field_file is None:
+                raise ValueError("initialization.type 'interpolate' requires initialization.field_file")
+            self.forcing = 0.0
+            from initflow import initialize_flow_interpolated
+            self.u, self.v, self.w, self.p = initialize_flow_interpolated(
+                field_file, self.nx, self.ny, self.nz, self.Lx, self.Ly, self.Lz,
+                self.z_c, self.z_f, device=self.device,
+                source_half=config['initialization'].get('source_half', 'lower'))
+            # enforce the target BCs (e.g. w=0 at the new top) before the
+            # initial projection
+            apply_bc_all(self.u, self.v, self.w, self.top_wall_bc_type)
+            self.initial_step = 0
+            self.time = 0.0
+            self.initial_time = 0.0
         else:
             # Bulk forcing state (pressure gradient)
             self.forcing = 0.0
@@ -287,8 +305,9 @@ class ChannelFlow:
 
         # Rescale u to match U_bulk exactly (discrete integration)
         # This prevents a large initial forcing kick that distorts the profile
-        # Only rescale if NOT restarting from a file
-        if field_file is None:
+        # Only rescale if NOT restarting from a file (interpolated fresh starts
+        # DO get rescaled: the source field's flow rate differs in general)
+        if field_file is None or config['initialization']['type'] == 'interpolate':
             u_bulk_init = compute_bulk_velocity(self.u, self.cell_vol_ratio, self.total_volume)
             if abs(u_bulk_init) > 1e-9:
                 self.u *= (self.U_bulk / u_bulk_init)
