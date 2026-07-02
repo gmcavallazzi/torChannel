@@ -1,0 +1,92 @@
+# Monti et al. (2022) "On the solidity parameter in canopy flows" — theta = 0 deg
+# rigid canopy, lambda = 0.35, Re_b = U_b H / nu = 6000.
+#
+# HEIGHT CONVENTION: H = 1 is the OUTER region height (canopy tip to free
+# surface) and h = 0.25 the canopy height, so the total channel height is
+# Lz = H + h = 1.25. All Reynolds numbers use H = 1: Re_b = U_b H / nu,
+# Re_tau,out ~ 1157 from the TOTAL stress at the canopy tip z = h,
+# Re_tau,in from the bed shear stress.
+
+grid:
+  nx: 576                  # dx+ ~ 12.6 at Re_tau,out = 1157
+  ny: 432                  # dy+ ~ 12.6
+  nz: 360                  # informational; nz_canopy + nz_outer wins
+  nz_canopy: 100           # canopy region [0, 0.25]
+  nz_outer: 260            # outer region [0.25, 1.25]
+
+domain:
+  Lx: 6.283185307179586    # 2*pi*H (streamwise)
+  Ly: 4.71238898038469     # 1.5*pi*H (spanwise)
+  Lz: 1.25                 # H + h (wall-normal: outer H=1 + canopy h=0.25)
+  stretching_type: double  # tanh clustering at the bed AND the canopy tips
+  z_transition: 0.25       # = canopy height h
+  gamma_canopy: 2.2        # dz_bed+ = dz_tip+ ~ 0.33 (paper: 0.15-0.44)
+  gamma_outer: auto        # solved for C1 continuity at z = h (-> ~2.45, dz_max+ ~ 11)
+
+flow:
+  Re: 6000.0               # Re_b = U_b H / nu (H = 1, code unit length)
+  Re_tau: 1157.0           # display/normalization target (Re_tau,out = u_tau,out H / nu)
+  U_bulk: 1.0
+  gamma: 2.6               # unused with stretching_type: double (parser requirement)
+
+boundary_conditions:
+  top_wall:
+    type: neumann          # free-slip open channel (w = 0, du/dz = dv/dz = 0)
+
+initialization:
+  # Interpolate an existing turbulent field onto this grid (fresh start:
+  # time resets, bulk velocity is rescaled to U_bulk, field re-projected).
+  # Any saved fields.npz works, including full-channel fields on other grids
+  # (the lower half is used). IMPORTANT: let the flow converge to the new
+  # statistically steady state BEFORE statistics start — watch canopy_drag_x,
+  # forcing and u_tau_tip plateaus in timeseries.npz, then set t_stats.
+  type: "interpolate"
+  field_file: "PATH/TO/turbulent_fields.npz"   # <- supply an existing field
+  source_half: lower
+
+time:
+  dt: 0.0005
+  n_steps: 10000000
+  t_max: 400.0
+  CFL_target: 0.3
+  dt_update_interval: 10
+  dt_max: 0.002
+  dt_min: 0.00005
+  scheme: "IMEX"
+
+solver:
+  type: fft
+
+canopy:
+  enabled: true
+  h: 0.25                  # filament length (= z_transition)
+  n_fil_x: 48              # 48 x 36 = 1728 filaments, tile dS = pi/24 ~ 0.131 H
+  n_fil_y: 36
+  placement: random_in_tile  # random position within each dS^2 tile (paper);
+                             # regular spacing would lock the canopy/outer-layer
+                             # exchange (channeling/meandering) — do not use
+  seed: 20260702
+  diameter: 0.024          # ~ 2.2 dx -> solidity lambda = d*h/dS^2 = 0.35
+  markers_per_ring: 4      # 4 surface markers per cross-section (paper)
+  rkpm:
+    normalize: true        # Pinelli epsilon self-response scaling
+  forcing:
+    alpha: auto            # stability-safe gain from the coupling spectrum
+    ramp_steps: 200        # soften the initial drag shock (set 0 on restarts)
+    n_iter: 2              # multidirect forcing iterations
+
+statistics:
+  n_stats: 250             # accumulate every 250 steps
+  t_stats: 150.0           # AFTER the canopy transient — verify with timeseries!
+  z_plus_target: 15.0
+  output_file: "turbulence_stats.npz"
+  state_file: "turbulence_stats_state.npz"
+
+output:
+  results_folder: "results_canopy_monti"
+  n_out: 100
+  n_save: 5000
+  clean_results_on_fresh_start: false
+
+compute:
+  device: auto

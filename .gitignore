@@ -7,15 +7,16 @@ matlab/
 .claude/
 .pytest_cache/
 
-# Config files - only keep config550.yaml
+# Config files
 config.yaml
-config_canopy_monti.yaml
 config_sharma_validation.yaml
 
-# Canopy and cylinder related files
-*canopy*
+# Legacy IBM files (removed feature); the RKPM canopy IBM IS tracked
 *cylinder*
 *sphere*
+
+# Local figures (untracked by design)
+figures_local/
 
 # Python
 __pycache__/
