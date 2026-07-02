@@ -1,4 +1,5 @@
 import os
+import math
 import torch
 import yaml
 import numpy as np
@@ -118,8 +119,8 @@ class ChannelFlow:
         self.stretching_type = config['domain'].get('stretching_type', 'symmetric')
 
         # Validate stretching type
-        if self.stretching_type not in ['symmetric', 'bottom', 'hybrid']:
-            raise ValueError(f"Invalid stretching type: {self.stretching_type}. Must be 'symmetric', 'bottom', or 'hybrid'")
+        if self.stretching_type not in ['symmetric', 'bottom', 'hybrid', 'double']:
+            raise ValueError(f"Invalid stretching type: {self.stretching_type}. Must be 'symmetric', 'bottom', 'hybrid', or 'double'")
 
         self.nu = 1.0 / config['flow']['Re']
         self.Re_tau = config['flow']['Re_tau']
@@ -351,6 +352,33 @@ class ChannelFlow:
         else:
             self.turbulence_stats = None
             print(f"\nStatistics collection disabled (n_stats = 0)", flush=True)
+
+        # Initialize rigid canopy IBM (RKPM direct forcing)
+        canopy_cfg = config.get('canopy', {})
+        self.canopy = None
+        self.canopy_drag = None
+        if canopy_cfg.get('enabled', False):
+            from canopy import RigidCanopyIBM
+            print(f"\nInitializing rigid canopy IBM (RKPM)...", flush=True)
+            self.canopy_h = float(canopy_cfg.get('h', 0.25))
+            z_transition = config['domain'].get('z_transition', None)
+            if z_transition is not None and abs(self.canopy_h - z_transition) > 1e-12:
+                print(f"WARNING: canopy.h ({self.canopy_h}) != domain.z_transition "
+                      f"({z_transition}) — grid clustering will not track the canopy tips", flush=True)
+            self.canopy = RigidCanopyIBM(canopy_cfg, self.nx, self.ny, self.nz,
+                                         self.dx, self.dy, self.Lx, self.Ly,
+                                         self.z_c, self.z_f, self.dz_f, self.dz_c,
+                                         self.device)
+            forcing_cfg = canopy_cfg.get('forcing', {})
+            alpha_cfg = forcing_cfg.get('alpha', 'auto')
+            self.canopy_alpha = (self.canopy.recommended_alpha if alpha_cfg == 'auto'
+                                 else float(alpha_cfg))
+            self.canopy_ramp = int(forcing_cfg.get('ramp_steps', 200))
+            print(f"  forcing gain alpha = {self.canopy_alpha:.3f}"
+                  f"{' (auto)' if alpha_cfg == 'auto' else ''}, "
+                  f"ramp_steps = {self.canopy_ramp}, n_iter = {self.canopy.n_iter}", flush=True)
+            self.canopy.save_geometry(self.results_folder)
+            self.canopy_drag = torch.zeros(3, dtype=torch.float64, device=self.device)
 
         # Save initial fields
         u_tau_init = compute_u_tau(self.u, self.z_c, self.nu, top_wall_bc_type=self.top_wall_bc_type)
@@ -683,6 +711,20 @@ class ChannelFlow:
         self.w = solve_implicit_diffusion_w(self.w, dt_t, self.nx, self.ny, self.nz,
                                             self.dz_c, self.dz_f, self.nu)
 
+        # ========== CANOPY IBM FORCING (RKPM direct forcing) ==========
+        # Applied to the fully advanced intermediate velocity, right before the
+        # projection. The increment goes straight into u/v/w — never into the
+        # AB2 history buffers (a stiff constraint force must not be extrapolated).
+        # Only interior nodes are read/written; ghosts are refreshed just below.
+        if self.canopy is not None:
+            if self.canopy_ramp > 0:
+                ramp = min(1.0, (self.current_step - self.initial_step) / self.canopy_ramp)
+            else:
+                ramp = 1.0
+            gain_t = torch.as_tensor(self.canopy_alpha * ramp, device=self.device,
+                                     dtype=torch.float64)
+            self.canopy_drag = self.canopy.apply_forcing(self.u, self.v, self.w, dt_t, gain_t)
+
         # Update ghost cells for intermediate velocity before divergence computation
         self.apply_bc_uvw()  # Fused boundary conditions
 
@@ -789,7 +831,11 @@ class ChannelFlow:
               f"dx={self.dx:.3f}, dy={self.dy:.3f}, dz_min={dz_min:.3f}, dz_max={dz_max:.3f}  |  " +
               f"dx⁺={dx_plus:.1f}, dy⁺={dy_plus:.1f}, dz⁺_min={dz_min_plus:.1f}, dz⁺_max={dz_max_plus:.1f}", flush=True)
         print("="*90, flush=True)
-        print(f"{'Step':>6} {'Time':>10} {'dt':>10} {'max(div)':>12} {'u_bulk':>10} {'u_tau':>10} {'forcing':>12}", flush=True)
+        header = (f"{'Step':>6} {'Time':>10} {'dt':>10} {'max(div)':>12} "
+                  f"{'u_bulk':>10} {'u_tau':>10} {'forcing':>12}")
+        if self.canopy is not None:
+            header += f" {'canopy_Fx':>12} {'u_tau_tip':>10}"
+        print(header, flush=True)
         print("="*90, flush=True)
         
         # Wall-time tracking
@@ -805,6 +851,8 @@ class ChannelFlow:
             'u_bulk': np.zeros(chunk_size, dtype=np.float64),
             'u_tau': np.zeros(chunk_size, dtype=np.float64),
             'forcing': np.zeros(chunk_size, dtype=np.float64),
+            'canopy_drag_x': np.zeros(chunk_size, dtype=np.float64),
+            'u_tau_tip': np.zeros(chunk_size, dtype=np.float64),
             'index': 0  # Current fill index
         }
         
@@ -814,7 +862,7 @@ class ChannelFlow:
             self.current_step = step  # Update instance variable for diagnostics
             # Print header every 10*n_out steps (but not at step 0, already printed)
             if step > 0 and step % (10 * self.n_out) == 0:
-                print(f"{'Step':>6} {'Time':>10} {'dt':>10} {'max(div)':>12} {'u_bulk':>10} {'u_tau':>10} {'forcing':>12}", flush=True)
+                print(header, flush=True)
 
                 # Print wall-time every 10*n_out steps
                 current_time = time.time()
@@ -850,6 +898,18 @@ class ChannelFlow:
                 u_tau_scalar = u_tau.item() if torch.is_tensor(u_tau) else u_tau
                 forcing_scalar = forcing.item() if torch.is_tensor(forcing) else forcing
 
+                # Canopy diagnostics: streamwise drag on the fluid and the
+                # equilibrium estimate of the friction velocity at the canopy
+                # tip, u_tau,tip = sqrt(forcing * (Lz - h)) (momentum balance
+                # above the tip; rigorous Re_tau,out comes from the total
+                # stress profile in post-processing)
+                if self.canopy is not None:
+                    canopy_drag_x_scalar = self.canopy_drag[0].item()
+                    u_tau_tip_scalar = math.sqrt(max(forcing_scalar * (self.Lz - self.canopy_h), 0.0))
+                else:
+                    canopy_drag_x_scalar = 0.0
+                    u_tau_tip_scalar = 0.0
+
                 # Collect time series data (pre-allocated array indexing)
                 idx = timeseries_data['index']
                 timeseries_data['step'][idx] = step
@@ -857,6 +917,8 @@ class ChannelFlow:
                 timeseries_data['u_bulk'][idx] = u_bulk_scalar
                 timeseries_data['u_tau'][idx] = u_tau_scalar
                 timeseries_data['forcing'][idx] = forcing_scalar
+                timeseries_data['canopy_drag_x'][idx] = canopy_drag_x_scalar
+                timeseries_data['u_tau_tip'][idx] = u_tau_tip_scalar
                 timeseries_data['index'] += 1
 
             # Collect turbulence statistics if enabled and conditions met
@@ -917,6 +979,8 @@ class ChannelFlow:
                     chunk_u_bulk = timeseries_data['u_bulk'][:n_filled]
                     chunk_u_tau = timeseries_data['u_tau'][:n_filled]
                     chunk_forcing = timeseries_data['forcing'][:n_filled]
+                    chunk_drag = timeseries_data['canopy_drag_x'][:n_filled]
+                    chunk_u_tau_tip = timeseries_data['u_tau_tip'][:n_filled]
 
                     # Append to existing file or create new one
                     if os.path.exists(npz_file):
@@ -928,6 +992,14 @@ class ChannelFlow:
                         all_u_bulk = np.concatenate([existing['u_bulk'], chunk_u_bulk])
                         all_u_tau = np.concatenate([existing['u_tau'], chunk_u_tau])
                         all_forcing = np.concatenate([existing['forcing'], chunk_forcing])
+                        # Backward compatibility: older files lack the canopy keys
+                        n_prev = len(existing['step'])
+                        prev_drag = existing['canopy_drag_x'] if 'canopy_drag_x' in existing \
+                            else np.zeros(n_prev)
+                        prev_tip = existing['u_tau_tip'] if 'u_tau_tip' in existing \
+                            else np.zeros(n_prev)
+                        all_drag = np.concatenate([prev_drag, chunk_drag])
+                        all_u_tau_tip = np.concatenate([prev_tip, chunk_u_tau_tip])
                     else:
                         # First save - use chunk data directly
                         all_step = chunk_step
@@ -935,6 +1007,8 @@ class ChannelFlow:
                         all_u_bulk = chunk_u_bulk
                         all_u_tau = chunk_u_tau
                         all_forcing = chunk_forcing
+                        all_drag = chunk_drag
+                        all_u_tau_tip = chunk_u_tau_tip
 
                     # Save to binary file (compressed for efficiency)
                     np.savez_compressed(npz_file,
@@ -942,7 +1016,9 @@ class ChannelFlow:
                                        time=all_time,
                                        u_bulk=all_u_bulk,
                                        u_tau=all_u_tau,
-                                       forcing=all_forcing)
+                                       forcing=all_forcing,
+                                       canopy_drag_x=all_drag,
+                                       u_tau_tip=all_u_tau_tip)
 
                     # Reset index for next chunk
                     timeseries_data['index'] = 0
@@ -958,7 +1034,11 @@ class ChannelFlow:
 
             # Print stats only every n_out steps
             if step % self.n_out == 0:
-                print(f"{step:6d} {self.time:10.6f} {self.dt:10.6f} {max_div:12.3e} {u_bulk_scalar:10.6f} {u_tau_scalar:10.6f} {forcing_scalar:12.3e}", flush=True)
+                row = (f"{step:6d} {self.time:10.6f} {self.dt:10.6f} {max_div:12.3e} "
+                       f"{u_bulk_scalar:10.6f} {u_tau_scalar:10.6f} {forcing_scalar:12.3e}")
+                if self.canopy is not None:
+                    row += f" {canopy_drag_x_scalar:12.4e} {u_tau_tip_scalar:10.6f}"
+                print(row, flush=True)
         
         # Print header
         total_wall_time = time.time() - start_time
