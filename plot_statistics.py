@@ -392,6 +392,10 @@ def main():
     parser.add_argument('--checkpoint', action='store_true',
                        help='Input file is a checkpoint/state file with running sums (will divide by n_samples)')
     parser.add_argument('--config', default=None, help='Config file (required when using --checkpoint)')
+    parser.add_argument('--canopy-height', type=float, default=None, dest='canopy_height',
+                       help='Canopy height h (open-channel canopy run): normalize by '
+                            'u_tau,out from the TOTAL stress at z=h (Monti et al. 2022 '
+                            'convention), report Re_tau,in / Re_tau,out and mark z=h')
 
     args = parser.parse_args()
 
@@ -568,6 +572,26 @@ def main():
 
     print(f"  Number of samples: {n_samples}")
 
+    # Canopy conventions (Monti et al. 2022): friction velocities from the
+    # stress profile. Height convention: H = outer region height (tip to free
+    # surface) = Lz - h; total channel height Lz = H + h. Re numbers use H.
+    canopy_h = args.canopy_height
+    if canopy_h is not None:
+        H = Lz - canopy_h
+        # Total stress profile: tau(z) = nu dU/dz - <u'w'>
+        tau_total = nu * dUdz_mean - uw_mean
+        # Re_tau,in: bed shear stress
+        u_tau_in = np.sqrt(max(nu * dUdz_wall_bot, 0.0))
+        # Re_tau,out: TOTAL stress interpolated at the canopy tip z = h
+        tau_tip = float(np.interp(canopy_h, z_c, tau_total))
+        u_tau_out = np.sqrt(max(tau_tip, 0.0))
+        print(f"\n  Canopy conventions (h = {canopy_h}, H = {H:.4f}):")
+        print(f"    u_tau,in  (bed shear)          = {u_tau_in:.6e}  ->  Re_tau,in  = {u_tau_in * H / nu:.1f}")
+        print(f"    u_tau,out (total stress at h)  = {u_tau_out:.6e}  ->  Re_tau,out = {u_tau_out * H / nu:.1f}")
+        if args.Re_tau is None:
+            u_tau = u_tau_out
+            print(f"    Normalizing profiles with u_tau,out (pass --Re_tau to override)")
+
     # Figure 1: Mean velocity profiles (2 subplots)
     fig1 = plt.figure(figsize=(12, 5))
     gs1 = fig1.add_gridspec(1, 2, hspace=0.3, wspace=0.3)
@@ -577,6 +601,9 @@ def main():
 
     plot_mean_velocity(z_c, U_mean, u_tau, nu, ax_U_outer, ax_U_inner)
     fig1.suptitle(f'Mean Velocity Profile ({n_samples} samples)', fontsize=12)
+    if canopy_h is not None:
+        ax_U_outer.axvline(canopy_h, color='gray', linestyle='--', linewidth=1, alpha=0.8)
+        ax_U_inner.axvline(canopy_h * u_tau / nu, color='gray', linestyle='--', linewidth=1, alpha=0.8)
 
     # Figure 2: Normal Reynolds stresses (1 subplot)
     fig2 = plt.figure(figsize=(8, 6))
@@ -584,6 +611,8 @@ def main():
 
     plot_reynolds_stresses_normal(z_c, uu_mean, vv_mean, ww_mean, u_tau, nu, ax_stresses)
     fig2.suptitle(f'Normal Reynolds Stresses ({n_samples} samples)', fontsize=12)
+    if canopy_h is not None:
+        ax_stresses.axvline(canopy_h * u_tau / nu, color='gray', linestyle='--', linewidth=1, alpha=0.8)
 
     # Figure 3: Shear stress and vorticity (2 square subplots)
     fig3 = plt.figure(figsize=(10, 5))
@@ -615,6 +644,8 @@ def main():
 
     plot_total_stress_decomposition(z_c, uw_mean, dUdz_mean, u_tau, nu, ax_total)
     fig5.suptitle(f'Total Stress Decomposition ({n_samples} samples)', fontsize=12)
+    if canopy_h is not None:
+        ax_total.axvline(canopy_h * u_tau / nu, color='gray', linestyle='--', linewidth=1, alpha=0.8)
 
     # Save figures
     formats = ['pdf', 'png'] if args.format == 'both' else [args.format]

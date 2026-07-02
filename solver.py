@@ -379,6 +379,9 @@ class ChannelFlow:
         if canopy_cfg.get('enabled', False):
             from canopy import RigidCanopyIBM
             print(f"\nInitializing rigid canopy IBM (RKPM)...", flush=True)
+            if self.time_scheme != 'IMEX':
+                raise ValueError("The canopy IBM is only wired into the IMEX scheme "
+                                 f"(time.scheme is '{self.time_scheme}')")
             self.canopy_h = float(canopy_cfg.get('h', 0.25))
             z_transition = config['domain'].get('z_transition', None)
             if z_transition is not None and abs(self.canopy_h - z_transition) > 1e-12:
@@ -831,8 +834,15 @@ class ChannelFlow:
         else:
             raise ValueError(f"Unknown time stepping scheme: {self.time_scheme}. Use 'IMEX', 'FE', or 'RK3' (future).")
 
-        # Compute friction velocity from Re_tau for grid display
-        delta = self.Lz / 2.0  # Half-channel height
+        # Compute friction velocity from Re_tau for grid display.
+        # Canopy convention: Re_tau uses H = outer region height = Lz - h.
+        # Open channel without canopy: full height; closed channel: half height.
+        if self.canopy is not None:
+            delta = self.Lz - self.canopy_h
+        elif self.top_wall_bc_type == 'neumann':
+            delta = self.Lz
+        else:
+            delta = self.Lz / 2.0
         u_tau_target = self.Re_tau * self.nu / delta
 
         # Compute grid spacings in friction units

@@ -37,9 +37,10 @@ There is no test runner framework (no pytest). Tests are standalone scripts run 
 - `operators.py` — Spatial discretization operators (advection, diffusion) on a staggered grid. Uses `@torch.jit.script` for fused GPU kernels
 - `projection_fft.py` — FFT-based Poisson solver for pressure projection (primary solver)
 - `projection.py` — Direct Poisson solver (fallback/testing)
-- `initflow.py` — Flow field initialization (vortices, random, parabolic, laminar, or restart from file)
-- `utils.py` — Grid generation (hyperbolic tangent stretching), I/O, diagnostic utilities
+- `initflow.py` — Flow field initialization (vortices, random, parabolic, laminar, restart from file, or interpolation of a saved field from a different grid)
+- `utils.py` — Grid generation (hyperbolic tangent stretching, hybrid, double-stretched canopy grid), I/O, diagnostic utilities
 - `statistics.py` — `TurbulenceStats` class: on-the-fly Reynolds stresses, mean profiles, 2D energy spectra
+- `canopy.py` — `RigidCanopyIBM`: RKPM immersed-boundary rigid filamentous canopy (Monti et al. 2022 setup); see `docs/CANOPY.md` and `config_canopy_monti.yaml`
 
 **Staggered grid layout**: Velocities are staggered (u at x-faces, v at y-faces, w at z-faces). Pressure is cell-centered. Periodic in x,y; wall-bounded in z with no-slip or free-slip BCs.
 
