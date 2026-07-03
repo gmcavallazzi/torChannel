@@ -134,9 +134,9 @@ def main():
     if u_in_eq is not None:
         add_ref(ax_ut, data['u_tau'], u_in_eq, 'C0',
                 rf'est.\ eq.\ ({args.r_in:.2f}$\,u_{{\tau,out}}$)', force=True)
-        # curiosity marker: half the expected (tip) friction velocity
-        add_ref(ax_ut, data['u_tau'], 0.5 * u_out_eq, 'C2',
-                rf'$u_{{\tau,out}}/2$', force=True)
+        # curiosity marker: HALF the estimated bed equilibrium
+        add_ref(ax_ut, data['u_tau'], 0.5 * u_in_eq, 'C2',
+                rf'est.\ eq.$/2$', force=True)
         ax_ut.legend(loc='best', fontsize=9)
     ax_ut.set_ylabel(r'$u_{\tau,\mathrm{bed}}$')
     ax_ut.set_title(r'bed friction velocity')
