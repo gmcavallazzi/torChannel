@@ -49,10 +49,28 @@ def main():
     ap.add_argument('logs', nargs='+', help='slurm-*.out file(s), oldest first')
     ap.add_argument('--out', default=None, help='output png')
     ap.add_argument('--target-re-tau', type=float, default=1157.0,
-                    help='target Re_tau,out for the u_tau,tip reference line (0 = off)')
-    ap.add_argument('--H', type=float, default=1.0, help='outer height for the target line')
+                    help='target Re_tau,out for the equilibrium reference lines (0 = off)')
+    ap.add_argument('--H', type=float, default=1.0, help='outer height (tip to surface)')
     ap.add_argument('--Re', type=float, default=6000.0, help='bulk Reynolds number (nu = 1/Re)')
+    ap.add_argument('--Lx', type=float, default=6.283185307179586)
+    ap.add_argument('--Ly', type=float, default=4.71238898038469)
+    ap.add_argument('--Lz', type=float, default=1.25, help='total channel height (H + h)')
+    ap.add_argument('--u-tau-in-ratio', type=float, default=0.46, dest='r_in',
+                    help='ESTIMATED u_tau,in / u_tau,out (sets the bed and Fx references)')
     args = ap.parse_args()
+
+    # Equilibrium references from the momentum balance at the target Re_tau,out:
+    #   u_tau,out = Re_tau,out * nu / H ; tau_tip = u_tau,out^2 = forcing * H
+    #   Fx = tau_bed * Lx*Ly - forcing * Lx*Ly*Lz   (tau_bed from the ESTIMATED
+    #   u_tau,in ratio -- the paper does not tabulate Re_tau,in)
+    if args.target_re_tau > 0:
+        u_out_eq = args.target_re_tau / args.Re * args.H
+        forcing_eq = u_out_eq ** 2 / args.H
+        u_in_eq = args.r_in * u_out_eq
+        A = args.Lx * args.Ly
+        Fx_eq = u_in_eq ** 2 * A - forcing_eq * A * args.Lz
+    else:
+        u_out_eq = forcing_eq = u_in_eq = Fx_eq = None
 
     # concatenate runs on a continuous time axis
     data, restarts, t_off = None, [], 0.0
@@ -80,15 +98,27 @@ def main():
     ax_dt.set_title(r'time step')
 
     ax_ut.plot(t, data['u_tau'], 'k-', lw=1)
+    if u_in_eq is not None:
+        ax_ut.axhline(u_in_eq, color='C0', ls='--', lw=1,
+                      label=rf'est.\ eq.\ ({args.r_in:.2f}$\,u_{{\tau,out}}$)')
+        ax_ut.legend(loc='best', fontsize=9)
     ax_ut.set_ylabel(r'$u_{\tau,\mathrm{bed}}$')
     ax_ut.set_title(r'bed friction velocity')
 
     ax_f.plot(t, data['forcing'], 'k-', lw=1, label=r'forcing $-\partial P/\partial x$')
+    if forcing_eq is not None:
+        ax_f.axhline(forcing_eq, color='C0', ls='--', lw=1,
+                     label=rf'eq.\ $u_{{\tau,out}}^2/H = {forcing_eq:.4f}$')
     ax_f.set_ylabel(r'forcing')
+    ax_f.legend(loc='upper left', fontsize=9)
     ax_fx = ax_f.twinx()
     ax_fx.plot(t, data['Fx'], 'C3-', lw=1, label=r'canopy $F_x$')
+    if Fx_eq is not None:
+        ax_fx.axhline(Fx_eq, color='C3', ls='--', lw=1,
+                      label=rf'est.\ eq.\ $F_x = {Fx_eq:.2f}$')
     ax_fx.set_ylabel(r'canopy $F_x$', color='C3')
     ax_fx.tick_params(axis='y', colors='C3')
+    ax_fx.legend(loc='lower right', fontsize=9)
     ax_f.set_title(r'driving vs canopy drag')
     ax_f.set_xlabel(r'$t\, U_b/H$')
 
