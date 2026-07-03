@@ -602,7 +602,8 @@ def main():
     plot_mean_velocity(z_c, U_mean, u_tau, nu, ax_U_outer, ax_U_inner)
     fig1.suptitle(f'Mean Velocity Profile ({n_samples} samples)', fontsize=12)
     if canopy_h is not None:
-        ax_U_outer.axvline(canopy_h, color='gray', linestyle='--', linewidth=1, alpha=0.8)
+        # outer plot: U on x, z on y -> horizontal tip line; inner plot: z+ on x
+        ax_U_outer.axhline(canopy_h, color='gray', linestyle='--', linewidth=1, alpha=0.8)
         ax_U_inner.axvline(canopy_h * u_tau / nu, color='gray', linestyle='--', linewidth=1, alpha=0.8)
 
     # Figure 2: Normal Reynolds stresses (1 subplot)
