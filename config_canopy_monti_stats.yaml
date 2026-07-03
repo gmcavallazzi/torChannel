@@ -52,7 +52,7 @@ canopy:
     n_iter: 2
 statistics:
   n_stats: 100
-  t_stats: 9.0
+  t_stats: 0.0
   output_file: turbulence_stats.npz
   state_file: turbulence_stats_state.npz
   spectra_z:
