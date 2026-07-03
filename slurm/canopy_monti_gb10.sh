@@ -12,4 +12,4 @@ export PYTORCH_JIT=0
 export TORCHANNEL_COMPILE=1
 export TORCHANNEL_POISSON_CUDAGRAPH=1
 
-python main.py config_canopy_monti_run.yaml
+python main.py config_canopy_monti_stats.yaml
