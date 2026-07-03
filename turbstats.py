@@ -437,6 +437,9 @@ class TurbulenceStats:
             'nx': self.nx,
             'ny': self.ny,
             'nz': self.nz,
+            # Grid truth travels with the state (plotting needs no reconstruction)
+            'z_c': np.asarray(self.z_c[1:self.nz+1].detach().cpu().numpy()),
+            'dz_f': np.asarray(self.dz_f.detach().cpu().numpy()),
         }
         if self.spectra_z is not None:
             state['spectra_z'] = np.asarray(self.spectra_z_actual)

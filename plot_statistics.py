@@ -150,18 +150,30 @@ def reconstruct_grid_from_config(config_file, nx, ny, nz):
     Lx = config['domain']['Lx']
     Ly = config['domain']['Ly']
     Lz = config['domain']['Lz']
-    gamma = config['flow']['gamma']
+    stretching = config['domain'].get('stretching_type', 'symmetric')
 
-    # Generate stretched grid in z
-    # Using simple numpy implementation (avoid torch dependency)
-    k = np.linspace(0, nz, nz+1)
-    xi = (2 * k / nz) - 1
-    z_f_np = 0.5 * Lz * (1 + np.tanh(gamma * xi) / np.tanh(gamma))
-
-    # Cell centers (interior points)
-    z_c = 0.5 * (z_f_np[:-1] + z_f_np[1:])  # (nz,)
-
-    # z_c already contains interior points only, no need to slice
+    if stretching == 'double':
+        from utils import generate_double_stretched_grid
+        _, z_c_t, _, _ = generate_double_stretched_grid(
+            config['grid']['nz_canopy'], config['grid']['nz_outer'],
+            config['domain']['z_transition'], Lz,
+            config['domain'].get('gamma_canopy', 2.0),
+            config['domain'].get('gamma_outer', 'auto'))
+        z_c = z_c_t[1:-1].cpu().numpy()          # interior points
+    elif stretching == 'hybrid':
+        from utils import generate_hybrid_grid
+        _, z_c_t, _, _ = generate_hybrid_grid(
+            config['grid']['nz_uniform'], config['grid']['nz_stretched'],
+            config['domain']['z_transition'], Lz,
+            config['domain'].get('gamma_stretched', 1.8))
+        z_c = z_c_t[1:-1].cpu().numpy()
+    else:
+        # symmetric tanh (legacy numpy implementation)
+        gamma = config['flow']['gamma']
+        k = np.linspace(0, nz, nz+1)
+        xi = (2 * k / nz) - 1
+        z_f_np = 0.5 * Lz * (1 + np.tanh(gamma * xi) / np.tanh(gamma))
+        z_c = 0.5 * (z_f_np[:-1] + z_f_np[1:])  # (nz,) interior points
 
 
     # Compute wavenumbers
@@ -454,6 +466,9 @@ def main():
         nz = int(data['nz'])
         print(f"  Reconstructing grid for nx={nx}, ny={ny}, nz={nz} from config...")
         z_c, kx, ky = reconstruct_grid_from_config(args.config, nx, ny, nz)
+        if 'z_c' in data.files:
+            # newer state files carry the grid truth; prefer it
+            z_c = data['z_c']
         
         # Checkpoint files might not have nu/u_tau, so we rely on args or config later
         # But we can try to get them if they exist (unlikely in simple checkpoint)
