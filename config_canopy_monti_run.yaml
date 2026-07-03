@@ -58,9 +58,9 @@ statistics:
   state_file: turbulence_stats_state.npz
 output:
   results_folder: results_canopy_monti
-  n_out: 100
+  n_out: 50
   n_save: 5000
   clean_results_on_fresh_start: false
-  n_snapshot: 40000
+  n_snapshot: 20000
 compute:
   device: auto
