@@ -61,6 +61,6 @@ output:
   n_out: 50
   n_save: 5000
   clean_results_on_fresh_start: false
-  n_snapshot: 20000
+  n_snapshot: 2000
 compute:
   device: auto

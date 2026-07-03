@@ -1060,17 +1060,20 @@ class ChannelFlow:
                                 self.Lx, self.Ly, step, self.time, u_tau_scalar, forcing_scalar,
                                 self.results_folder, 'fields.npz')
 
-                # Archived snapshot (kept, not overwritten)
-                if self.n_snapshot > 0 and step % self.n_snapshot == 0:
-                    snap_name = f'fields_t{self.time:09.3f}.npz'
-                    save_flow_fields(self.u, self.v, self.w, self.p, self.z_c, self.z_f,
-                                    self.Lx, self.Ly, step, self.time, u_tau_scalar, forcing_scalar,
-                                    self.results_folder, snap_name)
-                    print(f"  [Snapshot] Saved {snap_name}", flush=True)
-
                 # Save statistics state checkpoint if statistics are being collected
                 if self.turbulence_stats is not None and self.turbulence_stats.n_samples > 0:
                     self.turbulence_stats.save_state(self.stats_state_path)
+
+            # Archived snapshot (kept, not overwritten; independent of n_save)
+            if self.n_snapshot > 0 and step % self.n_snapshot == 0:
+                u_tau_snap = compute_u_tau(self.u, self.z_c, self.nu, top_wall_bc_type=self.top_wall_bc_type)
+                forcing_snap = forcing.item() if torch.is_tensor(forcing) else forcing
+                snap_name = f'fields_t{self.time:09.3f}.npz'
+                save_flow_fields(self.u, self.v, self.w, self.p, self.z_c, self.z_f,
+                                self.Lx, self.Ly, step, self.time,
+                                u_tau_snap.item() if torch.is_tensor(u_tau_snap) else u_tau_snap,
+                                forcing_snap, self.results_folder, snap_name)
+                print(f"  [Snapshot] Saved {snap_name}", flush=True)
 
             # Print stats only every n_out steps
             if step % self.n_out == 0:
