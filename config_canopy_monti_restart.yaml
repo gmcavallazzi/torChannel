@@ -1,0 +1,66 @@
+grid:
+  nx: 576
+  ny: 432
+  nz: 360
+  nz_canopy: 100
+  nz_outer: 260
+domain:
+  Lx: 6.283185307179586
+  Ly: 4.71238898038469
+  Lz: 1.25
+  stretching_type: double
+  z_transition: 0.25
+  gamma_canopy: 2.2
+  gamma_outer: auto
+flow:
+  Re: 6000.0
+  Re_tau: 1157.0
+  U_bulk: 1.0
+  gamma: 2.6
+boundary_conditions:
+  top_wall:
+    type: neumann
+initialization:
+  type: vortices
+  perturbation_intensity: 0.15
+  n_vortices: 6
+  field_file: results_canopy_monti/fields.npz
+time:
+  dt: 0.0005
+  n_steps: 10000000
+  t_max: 400.0
+  CFL_target: 0.3
+  dt_update_interval: 10
+  dt_max: 0.002
+  dt_min: 5.0e-05
+  scheme: IMEX
+solver:
+  type: fft
+canopy:
+  enabled: true
+  h: 0.25
+  n_fil_x: 48
+  n_fil_y: 36
+  placement: random_in_tile
+  seed: 20260702
+  diameter: 0.024
+  markers_per_ring: 4
+  rkpm:
+    normalize: true
+  forcing:
+    alpha: auto
+    ramp_steps: 0
+    n_iter: 2
+statistics:
+  n_stats: 250
+  t_stats: 250.0
+  z_plus_target: 15.0
+  output_file: turbulence_stats.npz
+  state_file: turbulence_stats_state.npz
+output:
+  results_folder: results_canopy_monti
+  n_out: 100
+  n_save: 5000
+  clean_results_on_fresh_start: false
+compute:
+  device: auto
