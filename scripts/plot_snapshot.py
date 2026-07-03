@@ -19,6 +19,7 @@ import numpy as np
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 plt.rcParams.update({'text.usetex': True, 'font.family': 'serif', 'font.size': 11})
 
@@ -58,12 +59,22 @@ def main():
     j_mid = ny // 2 if args.y_cut is None else int(np.argmin(np.abs(y - args.y_cut)))
     i_mid = nx // 2
 
-    vmin, vmax = np.percentile(fi, 0.5), np.percentile(fi, 99.5)
     cmap, shade = 'viridis', 'gouraud'
     lbl = rf'${args.field}/U_b$'
+    # shared robust limits for the two vertical planes (they are comparable);
+    # each horizontal cut gets its own limits (mid-canopy is far slower than
+    # the flow above the tips)
+    vmin, vmax = np.percentile(fi, 0.5), np.percentile(fi, 99.5)
 
-    fig = plt.figure(figsize=(12.0, 10.0), constrained_layout=True)
-    gs = fig.add_gridspec(3, 2, height_ratios=[1, 1, 1.45])
+    def add_cb(fig, ax, p):
+        # colorbar pinned to the axes (follows equal-aspect shrinkage)
+        div = make_axes_locatable(ax)
+        cax = div.append_axes('right', size='2.5%', pad=0.08)
+        fig.colorbar(p, cax=cax)
+
+    fig = plt.figure(figsize=(12.0, 10.0))
+    gs = fig.add_gridspec(3, 2, height_ratios=[1, 1, 1.45],
+                          hspace=0.42, wspace=0.18)
 
     ax = fig.add_subplot(gs[0, :])
     p = ax.pcolormesh(x, zc, fi[:, j_mid, :].T, shading=shade, cmap=cmap, vmin=vmin, vmax=vmax)
@@ -71,7 +82,7 @@ def main():
         ax.axhline(args.h, color='w', ls='--', lw=0.8)
     ax.set_xlabel(r'$x/H$'); ax.set_ylabel(r'$z/H$')
     ax.set_title(lbl + rf', $x$--$z$ at $y/H={y[j_mid]:.2f}$ (step {step}, $t={t:.2f}$)')
-    fig.colorbar(p, ax=ax, pad=0.01)
+    add_cb(fig, ax, p)
 
     ax = fig.add_subplot(gs[1, :])
     p = ax.pcolormesh(y, zc, fi[i_mid, :, :].T, shading=shade, cmap=cmap, vmin=vmin, vmax=vmax)
@@ -79,15 +90,17 @@ def main():
         ax.axhline(args.h, color='w', ls='--', lw=0.8)
     ax.set_xlabel(r'$y/H$'); ax.set_ylabel(r'$z/H$')
     ax.set_title(lbl + rf', $y$--$z$ at $x/H={x[i_mid]:.2f}$')
-    fig.colorbar(p, ax=ax, pad=0.01)
+    add_cb(fig, ax, p)
 
     for col, k, tag in ((0, k1, 'mid-canopy'), (1, k2, 'above tips')):
         ax = fig.add_subplot(gs[2, col])
-        p = ax.pcolormesh(x, y, fi[:, :, k].T, shading=shade, cmap=cmap, vmin=vmin, vmax=vmax)
+        sl = fi[:, :, k]
+        v0, v1 = np.percentile(sl, 0.5), np.percentile(sl, 99.5)
+        p = ax.pcolormesh(x, y, sl.T, shading=shade, cmap=cmap, vmin=v0, vmax=v1)
         ax.set_xlabel(r'$x/H$'); ax.set_ylabel(r'$y/H$')
         ax.set_title(lbl + rf' at $z/H={zc[k]:.3f}$ ({tag})')
         ax.set_aspect('equal')
-        fig.colorbar(p, ax=ax, pad=0.02, shrink=0.9)
+        add_cb(fig, ax, p)
 
     out = args.out
     if out is None:
