@@ -95,6 +95,21 @@ def main():
         raise SystemExit('no data parsed')
 
     t = data['time']
+
+    def add_ref(ax, series, val, color, label):
+        """Reference line only if it doesn't wreck the axis: the axes always
+        follow the data; a far-away reference becomes an off-scale note."""
+        lo, hi = np.nanmin(series), np.nanmax(series)
+        span = max(hi - lo, 0.05 * abs(0.5 * (hi + lo)), 1e-12)
+        if lo - 1.5 * span <= val <= hi + 1.5 * span:
+            ax.axhline(val, color=color, ls='--', lw=1, label=label)
+            return True
+        ax.set_ylim(lo - 0.15 * span, hi + 0.15 * span)
+        ax.text(0.98, 0.95, label + rf' $= {val:.4g}$ (off scale)',
+                transform=ax.transAxes, ha='right', va='top',
+                fontsize=9, color=color)
+        return False
+
     fig, axes = plt.subplots(2, 2, figsize=(11, 6.5), sharex=True)
     (ax_dt, ax_ut), (ax_f, ax_tip) = axes
 
@@ -104,23 +119,22 @@ def main():
 
     ax_ut.plot(t, data['u_tau'], 'k-', lw=1)
     if u_in_eq is not None:
-        ax_ut.axhline(u_in_eq, color='C0', ls='--', lw=1,
-                      label=rf'est.\ eq.\ ({args.r_in:.2f}$\,u_{{\tau,out}}$)')
-        ax_ut.legend(loc='best', fontsize=9)
+        if add_ref(ax_ut, data['u_tau'], u_in_eq, 'C0',
+                   rf'est.\ eq.\ ({args.r_in:.2f}$\,u_{{\tau,out}}$)'):
+            ax_ut.legend(loc='best', fontsize=9)
     ax_ut.set_ylabel(r'$u_{\tau,\mathrm{bed}}$')
     ax_ut.set_title(r'bed friction velocity')
 
     ax_f.plot(t, data['forcing'], 'k-', lw=1, label=r'forcing $-\partial P/\partial x$')
     if forcing_eq is not None:
-        ax_f.axhline(forcing_eq, color='C0', ls='--', lw=1,
-                     label=rf'eq.\ $u_{{\tau,out}}^2/H = {forcing_eq:.4f}$')
+        add_ref(ax_f, data['forcing'], forcing_eq, 'C0',
+                rf'eq.\ $u_{{\tau,out}}^2/H$')
     ax_f.set_ylabel(r'forcing')
     ax_f.legend(loc='upper left', fontsize=9)
     ax_fx = ax_f.twinx()
     ax_fx.plot(t, data['Fx'], 'C3-', lw=1, label=r'canopy $F_x$')
     if Fx_eq is not None:
-        ax_fx.axhline(Fx_eq, color='C3', ls='--', lw=1,
-                      label=rf'est.\ eq.\ $F_x = {Fx_eq:.2f}$')
+        add_ref(ax_fx, data['Fx'], Fx_eq, 'C3', rf'est.\ eq.\ $F_x$')
     ax_fx.set_ylabel(r'canopy $F_x$', color='C3')
     ax_fx.tick_params(axis='y', colors='C3')
     ax_fx.legend(loc='lower right', fontsize=9)
@@ -129,9 +143,9 @@ def main():
 
     ax_tip.plot(t, data['u_tau_tip'], 'k-', lw=1)
     if args.target_re_tau > 0:
-        ax_tip.axhline(args.target_re_tau / args.Re * args.H, color='C0', ls='--', lw=1,
-                       label=rf'$Re_{{\tau,out}}={args.target_re_tau:.0f}$')
-        ax_tip.legend(loc='best', fontsize=9)
+        if add_ref(ax_tip, data['u_tau_tip'], args.target_re_tau / args.Re * args.H,
+                   'C0', rf'$Re_{{\tau,out}}={args.target_re_tau:.0f}$'):
+            ax_tip.legend(loc='best', fontsize=9)
     ax_tip.set_ylabel(r'$u_{\tau,\mathrm{tip}}$')
     ax_tip.set_title(r'tip friction velocity (momentum balance)')
     ax_tip.set_xlabel(r'$t\, U_b/H$')
