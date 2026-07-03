@@ -57,6 +57,9 @@ def main():
     ap.add_argument('--Lz', type=float, default=1.25, help='total channel height (H + h)')
     ap.add_argument('--u-tau-in-ratio', type=float, default=0.46, dest='r_in',
                     help='ESTIMATED u_tau,in / u_tau,out (sets the bed and Fx references)')
+    ap.add_argument('--all', action='store_true',
+                    help='keep every sample (default: skip the first 10 of each log, '
+                         'which carry the restart spike)')
     args = ap.parse_args()
 
     # Equilibrium references from the momentum balance at the target Re_tau,out:
@@ -76,6 +79,8 @@ def main():
     data, restarts, t_off = None, [], 0.0
     for path in args.logs:
         d = parse_log(path)
+        if not args.all:
+            d = {k: v[10:] for k, v in d.items()}   # drop the restart spike
         if len(d['time']) == 0:
             print(f'warning: no diagnostic rows in {path}')
             continue
