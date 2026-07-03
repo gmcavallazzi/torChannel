@@ -154,6 +154,9 @@ class ChannelFlow:
         # Use new n_out/n_save if available, fallback to old parameters
         self.n_out = output_config.get('n_out', output_config.get('print_interval', 10))
         self.n_save = output_config.get('n_save', output_config.get('slice_interval', 100))
+        # Archived snapshots: every n_snapshot steps save fields_t<time>.npz
+        # (in addition to the rolling fields.npz checkpoint). 0 = disabled.
+        self.n_snapshot = output_config.get('n_snapshot', 0)
         
         os.makedirs(self.results_folder, exist_ok=True)
 
@@ -1056,6 +1059,14 @@ class ChannelFlow:
                 save_flow_fields(self.u, self.v, self.w, self.p, self.z_c, self.z_f,
                                 self.Lx, self.Ly, step, self.time, u_tau_scalar, forcing_scalar,
                                 self.results_folder, 'fields.npz')
+
+                # Archived snapshot (kept, not overwritten)
+                if self.n_snapshot > 0 and step % self.n_snapshot == 0:
+                    snap_name = f'fields_t{self.time:09.3f}.npz'
+                    save_flow_fields(self.u, self.v, self.w, self.p, self.z_c, self.z_f,
+                                    self.Lx, self.Ly, step, self.time, u_tau_scalar, forcing_scalar,
+                                    self.results_folder, snap_name)
+                    print(f"  [Snapshot] Saved {snap_name}", flush=True)
 
                 # Save statistics state checkpoint if statistics are being collected
                 if self.turbulence_stats is not None and self.turbulence_stats.n_samples > 0:
