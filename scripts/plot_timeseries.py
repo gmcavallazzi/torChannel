@@ -108,9 +108,11 @@ def main():
             ax.axhline(val, color=color, ls='--', lw=1, label=label)
             return True
         ax.set_ylim(lo - 0.15 * span, hi + 0.15 * span)
-        ax.text(0.98, 0.95, label + rf' $= {val:.4g}$ (off scale)',
+        n_notes = getattr(ax, '_ref_notes', 0)
+        ax.text(0.98, 0.95 - 0.09 * n_notes, label + rf' $= {val:.4g}$ (off scale)',
                 transform=ax.transAxes, ha='right', va='top',
                 fontsize=9, color=color)
+        ax._ref_notes = n_notes + 1
         return False
 
     fig, axes = plt.subplots(2, 2, figsize=(11, 6.5), sharex=True)
@@ -122,8 +124,12 @@ def main():
 
     ax_ut.plot(t, data['u_tau'], 'k-', lw=1)
     if u_in_eq is not None:
-        if add_ref(ax_ut, data['u_tau'], u_in_eq, 'C0',
-                   rf'est.\ eq.\ ({args.r_in:.2f}$\,u_{{\tau,out}}$)'):
+        drawn = add_ref(ax_ut, data['u_tau'], u_in_eq, 'C0',
+                        rf'est.\ eq.\ ({args.r_in:.2f}$\,u_{{\tau,out}}$)')
+        # curiosity marker: half the expected (tip) friction velocity
+        drawn |= add_ref(ax_ut, data['u_tau'], 0.5 * u_out_eq, 'C2',
+                         rf'$u_{{\tau,out}}/2$')
+        if drawn:
             ax_ut.legend(loc='best', fontsize=9)
     ax_ut.set_ylabel(r'$u_{\tau,\mathrm{bed}}$')
     ax_ut.set_title(r'bed friction velocity')
