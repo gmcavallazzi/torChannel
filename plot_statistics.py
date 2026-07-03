@@ -207,7 +207,11 @@ def plot_reynolds_stresses_normal(z_c, uu, vv, ww, u_tau, nu, ax):
 
 
 def plot_shear_vorticity(z_c, uw, dUdz, u_tau, nu, ax_uw, ax_omega):
-    """Plot shear stress and mean vorticity (dU/dz) in square subplots."""
+    """Plot shear stress and mean vorticity (dU/dz) in square subplots.
+
+    The last (topmost) point is dropped: the one-sided dU/dz there depends on
+    the top boundary condition (e.g. free-slip) and is not meaningful."""
+    z_c, uw, dUdz = z_c[:-1], uw[:-1], dUdz[:-1]
     z_plus = compute_wall_coordinates(z_c, u_tau, nu)
 
     # Shear stress: -<u'w'> / u_tau^2
@@ -239,7 +243,10 @@ def plot_total_stress_decomposition(z_c, uw, dUdz, u_tau, nu, ax):
     - Total stress: sum of the above (thick black line)
 
     Note: omega_y_mean ≈ dU/dz since dW/dx = 0 statistically in homogeneous flow
+    The last (topmost) point is dropped: the one-sided dU/dz there depends on
+    the top boundary condition and is not meaningful.
     """
+    z_c, uw, dUdz = z_c[:-1], uw[:-1], dUdz[:-1]
     z_plus = compute_wall_coordinates(z_c, u_tau, nu)
 
     # Reynolds stress component: -<u'w'> / u_tau^2
