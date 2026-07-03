@@ -55,8 +55,11 @@ def main():
     ap.add_argument('--Lx', type=float, default=6.283185307179586)
     ap.add_argument('--Ly', type=float, default=4.71238898038469)
     ap.add_argument('--Lz', type=float, default=1.25, help='total channel height (H + h)')
-    ap.add_argument('--u-tau-in-ratio', type=float, default=0.46, dest='r_in',
-                    help='ESTIMATED u_tau,in / u_tau,out (sets the bed and Fx references)')
+    ap.add_argument('--u-tau-in-ratio', type=float, default=0.41, dest='r_in',
+                    help='ESTIMATED u_tau,in / u_tau,out for the bed and Fx references. '
+                         'Default 0.41 = the ratio of the paper\'s validation case '
+                         '(Shimizu 1991: Re_tau,in/out = 535/1310, lambda=0.41, h/H=0.65) — '
+                         'an analogy, NOT a published value for the lambda=0.35 case')
     ap.add_argument('--all', action='store_true',
                     help='keep every sample (default: skip the first 10 of each log, '
                          'which carry the restart spike)')
