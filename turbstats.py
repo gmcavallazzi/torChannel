@@ -18,7 +18,8 @@ class TurbulenceStats:
     """
 
     def __init__(self, nx, ny, nz, Lx, Ly, Lz, z_c, z_f, dz_c, dz_f,
-                 dx, dy, nu, Re_tau_target, z_plus_target=15.0, device='cpu'):
+                 dx, dy, nu, Re_tau_target, z_plus_target=15.0, device='cpu',
+                 spectra_z=None):
         """
         Initialize statistics accumulator.
 
@@ -31,7 +32,11 @@ class TurbulenceStats:
             nu: Kinematic viscosity
             Re_tau_target: Target friction Reynolds number (for z+ calculation)
             z_plus_target: Target height in wall units for 2D spectra
+                (legacy two-wall mode; ignored when spectra_z is given)
             device: 'cpu' or 'cuda'
+            spectra_z: optional list of PHYSICAL heights for the 2D-spectra
+                planes (e.g. [0.125, 0.25, 0.75] for a canopy run); each plane
+                gets its own spectra, no wall-mirroring
         """
         self.nx = nx
         self.ny = ny
@@ -85,26 +90,72 @@ class TurbulenceStats:
         self.uw_sum = torch.zeros(nz, device=device)
 
 
-        # Initialize accumulators for 2D energy spectra at z+
-        # Shape: (nx//2, ny//2) for each of uu, vv, ww, uw
-        # Store raw spectra, premultiplication done during plotting
-        self.E_uu_2d_sum = torch.zeros(nx//2, ny//2, device=device)
-        self.E_vv_2d_sum = torch.zeros(nx//2, ny//2, device=device)
-        self.E_ww_2d_sum = torch.zeros(nx//2, ny//2, device=device)
-        self.E_uw_2d_sum = torch.zeros(nx//2, ny//2, device=device)
+        # Third central moments (skewness) and canopy drag profile accumulators
+        self.uuu_sum = torch.zeros(nz, device=device)
+        self.www_sum = torch.zeros(nz, device=device)
+        self.fx_profile_sum = torch.zeros(nz, device=device)
+
+        # Initialize accumulators for 2D energy spectra
+        # Multi-plane mode (canopy): one spectrum per requested physical height.
+        # Legacy mode: single spectrum averaged between the two z+ wall planes.
+        self.spectra_z = list(spectra_z) if spectra_z is not None else None
+        if self.spectra_z is not None:
+            z_c_interior = z_c[1:nz+1]
+            self.spectra_k = [int(torch.argmin(torch.abs(z_c_interior - zq)).item())
+                              for zq in self.spectra_z]
+            self.spectra_z_actual = [float(z_c_interior[k]) for k in self.spectra_k]
+            n_pl = len(self.spectra_k)
+            print(f"  2D spectra planes at z = " +
+                  ", ".join(f"{z:.4f}" for z in self.spectra_z_actual), flush=True)
+            self.E_uu_2d_sum = torch.zeros(n_pl, nx//2, ny//2, device=device)
+            self.E_vv_2d_sum = torch.zeros(n_pl, nx//2, ny//2, device=device)
+            self.E_ww_2d_sum = torch.zeros(n_pl, nx//2, ny//2, device=device)
+            self.E_uw_2d_sum = torch.zeros(n_pl, nx//2, ny//2, device=device)
+        else:
+            self.E_uu_2d_sum = torch.zeros(nx//2, ny//2, device=device)
+            self.E_vv_2d_sum = torch.zeros(nx//2, ny//2, device=device)
+            self.E_ww_2d_sum = torch.zeros(nx//2, ny//2, device=device)
+            self.E_uw_2d_sum = torch.zeros(nx//2, ny//2, device=device)
 
         # Wavenumber arrays for 2D spectra (for plotting/saving)
         # dx, dy are already grid spacings (Lx/nx, Ly/ny)
         self.kx = 2 * np.pi * np.fft.rfftfreq(nx, d=dx)[1:]  # Skip DC component
         self.ky = 2 * np.pi * np.fft.rfftfreq(ny, d=dy)[1:]
 
-    def accumulate_statistics(self, u, v, w, u_tau_current):
+    def _plane_spectra(self, u_pl, v_pl, w_pl):
+        """Folded 2D spectra (E_uu, E_vv, E_ww, E_uw) of one (nx, ny) plane."""
+        u_fft = torch.fft.rfft2(u_pl)
+        v_fft = torch.fft.rfft2(v_pl)
+        w_fft = torch.fft.rfft2(w_pl)
+        norm = (self.nx * self.ny) ** 2
+        # real/imag arithmetic (complex pointwise ops trigger nvrtc jiterator
+        # kernels that fail on the GB10 architecture)
+        ur, ui = u_fft.real, u_fft.imag
+        vr, vi = v_fft.real, v_fft.imag
+        wr, wi = w_fft.real, w_fft.imag
+        E_uu = (ur * ur + ui * ui) / norm
+        E_vv = (vr * vr + vi * vi) / norm
+        E_ww = (wr * wr + wi * wi) / norm
+        E_uw = (ur * wr + ui * wi) / norm
+
+        nkx, nky = self.nx // 2, self.ny // 2
+
+        def fold(E):
+            E_pos = E[1:nkx+1, 1:nky+1]
+            E_neg = torch.flip(E[self.nx-nkx:self.nx, 1:nky+1], dims=[0])
+            return (E_pos + E_neg)[:nkx, :nky]
+
+        return fold(E_uu), fold(E_vv), fold(E_ww), fold(E_uw)
+
+    def accumulate_statistics(self, u, v, w, u_tau_current, fx_profile=None):
         """
         Accumulate statistics from one snapshot.
 
         Args:
             u, v, w: Velocity fields (staggered grid, including ghost cells)
             u_tau_current: Current friction velocity (for diagnostics)
+            fx_profile: optional (nz,) tensor with the instantaneous canopy
+                streamwise force per wall-normal level (from the IBM)
         """
         # Extract interior points
         # u: shape (nx+1, ny+2, nz+2) -> interior: (nx+1, ny, nz) at [0:nx+1, 1:ny+1, 1:nz+1]
@@ -147,10 +198,28 @@ class TurbulenceStats:
         self.ww_sum += ww
         self.uw_sum += uw
 
-        # Compute 2D premultiplied spectra at z+ locations
-        # Extract planes at k_bot and k_top
-        # Average between both walls
+        # Third central moments (skewness numerators)
+        self.uuu_sum += torch.mean(u_fluct ** 3, dim=(0, 1))
+        self.www_sum += torch.mean(w_fluct ** 3, dim=(0, 1))
 
+        # Canopy drag profile (instantaneous IBM force per z-level)
+        if fx_profile is not None:
+            self.fx_profile_sum += fx_profile
+
+        # ---- 2D spectra ----
+        if self.spectra_z is not None:
+            # Multi-plane mode: one spectrum per requested height
+            for i, k in enumerate(self.spectra_k):
+                E4 = self._plane_spectra(u_fluct[:, :, k], v_fluct[:, :, k],
+                                         w_fluct[:, :, k])
+                self.E_uu_2d_sum[i] += E4[0]
+                self.E_vv_2d_sum[i] += E4[1]
+                self.E_ww_2d_sum[i] += E4[2]
+                self.E_uw_2d_sum[i] += E4[3]
+            self.n_samples += 1
+            return
+
+        # Legacy mode: planes at z+ from each wall, averaged
         # Bottom wall plane
         u_bot = u_fluct[:, :, self.k_bot - 1]  # (nx, ny)
         v_bot = v_fluct[:, :, self.k_bot - 1]
@@ -282,23 +351,32 @@ class TurbulenceStats:
         stats = {
             'n_samples': self.n_samples,
             'z_c': np.asarray(self.z_c[1:self.nz+1].detach().cpu().numpy()),  # Interior points
+            'dz_f': np.asarray(self.dz_f.detach().cpu().numpy()),
+            'Lx': self.Lx,
+            'Ly': self.Ly,
             'U_mean': U_mean,
             'uu_mean': uu_mean,
             'vv_mean': vv_mean,
             'ww_mean': ww_mean,
             'uw_mean': uw_mean,
+            'uuu_mean': np.asarray((self.uuu_sum / self.n_samples).detach().cpu().numpy()),
+            'www_mean': np.asarray((self.www_sum / self.n_samples).detach().cpu().numpy()),
+            'fx_profile_mean': np.asarray((self.fx_profile_sum / self.n_samples).detach().cpu().numpy()),
             'kx': self.kx[:self.nx//2],
             'ky': self.ky[:self.ny//2],
             'E_uu_2d': E_uu_2d,
             'E_vv_2d': E_vv_2d,
             'E_ww_2d': E_ww_2d,
             'E_uw_2d': E_uw_2d,
-            'z_plus_target': self.k_bot,  # Store for reference
             'Re_tau_target': self.u_tau_target * (self.Lz / 2) / self.nu,
             'nu': self.nu,  # Kinematic viscosity
             'Re': 1.0 / self.nu,  # Reynolds number
             'u_tau': u_tau_computed  # Friction velocity from Reynolds stress
         }
+        if self.spectra_z is not None:
+            stats['spectra_z'] = np.asarray(self.spectra_z_actual)
+        else:
+            stats['z_plus_target'] = self.k_bot  # legacy reference
 
         return stats
 
@@ -348,6 +426,9 @@ class TurbulenceStats:
             'vv_sum': np.asarray(self.vv_sum.detach().cpu().numpy()),
             'ww_sum': np.asarray(self.ww_sum.detach().cpu().numpy()),
             'uw_sum': np.asarray(self.uw_sum.detach().cpu().numpy()),
+            'uuu_sum': np.asarray(self.uuu_sum.detach().cpu().numpy()),
+            'www_sum': np.asarray(self.www_sum.detach().cpu().numpy()),
+            'fx_profile_sum': np.asarray(self.fx_profile_sum.detach().cpu().numpy()),
             'E_uu_2d_sum': np.asarray(self.E_uu_2d_sum.detach().cpu().numpy()),
             'E_vv_2d_sum': np.asarray(self.E_vv_2d_sum.detach().cpu().numpy()),
             'E_ww_2d_sum': np.asarray(self.E_ww_2d_sum.detach().cpu().numpy()),
@@ -357,6 +438,8 @@ class TurbulenceStats:
             'ny': self.ny,
             'nz': self.nz,
         }
+        if self.spectra_z is not None:
+            state['spectra_z'] = np.asarray(self.spectra_z_actual)
 
         np.savez_compressed(filepath, **state)
         print(f"\nStatistics state saved: {self.n_samples} samples accumulated -> {filepath}", flush=True)
@@ -391,10 +474,23 @@ class TurbulenceStats:
         self.vv_sum = torch.tensor(data['vv_sum'], device=self.device)
         self.ww_sum = torch.tensor(data['ww_sum'], device=self.device)
         self.uw_sum = torch.tensor(data['uw_sum'], device=self.device)
+        if data['E_uu_2d_sum'].shape != tuple(self.E_uu_2d_sum.shape):
+            raise ValueError(
+                f"Spectra accumulator shape mismatch (state {data['E_uu_2d_sum'].shape} vs "
+                f"current {tuple(self.E_uu_2d_sum.shape)}): the spectra_z configuration "
+                f"changed between runs — start fresh statistics or restore the old config")
         self.E_uu_2d_sum = torch.tensor(data['E_uu_2d_sum'], device=self.device)
         self.E_vv_2d_sum = torch.tensor(data['E_vv_2d_sum'], device=self.device)
         self.E_ww_2d_sum = torch.tensor(data['E_ww_2d_sum'], device=self.device)
         self.E_uw_2d_sum = torch.tensor(data['E_uw_2d_sum'], device=self.device)
+
+        # Newer accumulators: tolerate their absence in old state files
+        for key, attr in (('uuu_sum', 'uuu_sum'), ('www_sum', 'www_sum'),
+                          ('fx_profile_sum', 'fx_profile_sum')):
+            if key in data.files:
+                setattr(self, attr, torch.tensor(data[key], device=self.device))
+            else:
+                print(f"  (old state file: {key} missing, restarting that sum from zero)", flush=True)
 
         # Backward compatibility: ignore dUdz_sum and omega_y_sum if they exist in old files
         # (they are no longer computed or needed)

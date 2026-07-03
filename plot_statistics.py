@@ -625,18 +625,39 @@ def main():
     fig3.suptitle(f'Shear Stress and Mean Velocity Gradient ({n_samples} samples)', fontsize=12)
 
     # Figure 4: 2D premultiplied spectra (4 subplots)
-    fig4 = plt.figure(figsize=(12, 10))
-    gs4 = fig4.add_gridspec(2, 2, hspace=0.35, wspace=0.35)
+    # Multi-plane mode (canopy runs): one figure per stored plane
+    spectra_z = None
+    if not args.checkpoint and 'spectra_z' in data.files:
+        spectra_z = data['spectra_z']
+    elif args.checkpoint and 'spectra_z' in data.files:
+        spectra_z = data['spectra_z']
 
-    ax_premult_uu = fig4.add_subplot(gs4[0, 0])
-    ax_premult_vv = fig4.add_subplot(gs4[0, 1])
-    ax_premult_ww = fig4.add_subplot(gs4[1, 0])
-    ax_premult_uw = fig4.add_subplot(gs4[1, 1])
+    spectra_figs = []   # list of (fig, filename_tag)
+    if spectra_z is not None:
+        for i, z_pl in enumerate(spectra_z):
+            figS = plt.figure(figsize=(12, 10))
+            gsS = figS.add_gridspec(2, 2, hspace=0.35, wspace=0.35)
+            axs = [figS.add_subplot(gsS[r, c]) for r in (0, 1) for c in (0, 1)]
+            plot_2d_spectra_wavelength(kx, ky, premult_uu[i], premult_vv[i],
+                                       premult_ww[i], premult_uw[i],
+                                       axs[0], axs[1], axs[2], axs[3], u_tau, nu)
+            figS.suptitle(f'2D Premultiplied Spectra at $z = {z_pl:.3f}$ ({n_samples} samples)',
+                          fontsize=12)
+            spectra_figs.append((figS, f"spectra_2d_z{z_pl:.3f}"))
+        fig4 = None
+    else:
+        fig4 = plt.figure(figsize=(12, 10))
+        gs4 = fig4.add_gridspec(2, 2, hspace=0.35, wspace=0.35)
 
-    plot_2d_spectra_wavelength(kx, ky, premult_uu, premult_vv, premult_ww, premult_uw,
-                               ax_premult_uu, ax_premult_vv, ax_premult_ww, ax_premult_uw,
-                               u_tau, nu)
-    fig4.suptitle(f'2D Premultiplied Spectra at $z^+ \\approx 15$ ({n_samples} samples)', fontsize=12)
+        ax_premult_uu = fig4.add_subplot(gs4[0, 0])
+        ax_premult_vv = fig4.add_subplot(gs4[0, 1])
+        ax_premult_ww = fig4.add_subplot(gs4[1, 0])
+        ax_premult_uw = fig4.add_subplot(gs4[1, 1])
+
+        plot_2d_spectra_wavelength(kx, ky, premult_uu, premult_vv, premult_ww, premult_uw,
+                                   ax_premult_uu, ax_premult_vv, ax_premult_ww, ax_premult_uw,
+                                   u_tau, nu)
+        fig4.suptitle(f'2D Premultiplied Spectra at $z^+ \\approx 15$ ({n_samples} samples)', fontsize=12)
 
     # Figure 5: Total stress decomposition (1:1 aspect ratio)
     fig5 = plt.figure(figsize=(6, 6))
@@ -647,6 +668,45 @@ def main():
     if canopy_h is not None:
         ax_total.axvline(canopy_h * u_tau / nu, color='gray', linestyle='--', linewidth=1, alpha=0.8)
 
+    # Figure 6: skewness profiles (new stats; skip for older files)
+    fig6 = None
+    if 'uuu_mean' in data.files and not args.checkpoint:
+        uuu = data['uuu_mean']
+        www = data['www_mean']
+        with np.errstate(divide='ignore', invalid='ignore'):
+            S_u = uuu / np.maximum(uu_mean, 1e-300) ** 1.5
+            S_w = www / np.maximum(ww_mean, 1e-300) ** 1.5
+        fig6 = plt.figure(figsize=(6, 6))
+        ax6 = fig6.add_subplot(111)
+        ax6.plot(S_u, z_c, 'k-', lw=1.5, label=r'$S_u$')
+        ax6.plot(S_w, z_c, 'C3-', lw=1.5, label=r'$S_w$')
+        ax6.axvline(0, color='gray', lw=0.8)
+        if canopy_h is not None:
+            ax6.axhline(canopy_h, color='gray', linestyle='--', lw=1, alpha=0.8)
+        ax6.set_xlabel(r'skewness')
+        ax6.set_ylabel(r'$z$')
+        ax6.legend()
+        ax6.grid(alpha=0.3)
+        fig6.suptitle(f'Velocity Skewness ({n_samples} samples)', fontsize=12)
+
+    # Figure 7: canopy drag force density profile
+    fig7 = None
+    if ('fx_profile_mean' in data.files and not args.checkpoint
+            and np.abs(data['fx_profile_mean']).max() > 0 and 'dz_f' in data.files):
+        fx_prof = data['fx_profile_mean']
+        A_xy = float(data['Lx']) * float(data['Ly'])
+        f_density = -fx_prof / (A_xy * data['dz_f'])   # drag force density (+ = opposing flow)
+        fig7 = plt.figure(figsize=(6, 6))
+        ax7 = fig7.add_subplot(111)
+        ax7.plot(f_density, z_c, 'k-', lw=1.5)
+        if canopy_h is not None:
+            ax7.axhline(canopy_h, color='gray', linestyle='--', lw=1, alpha=0.8)
+            ax7.set_ylim(0, 1.6 * canopy_h)
+        ax7.set_xlabel(r'$-\langle f_x \rangle$ (drag density)')
+        ax7.set_ylabel(r'$z$')
+        ax7.grid(alpha=0.3)
+        fig7.suptitle(f'Canopy Drag Profile ({n_samples} samples)', fontsize=12)
+
     # Save figures
     formats = ['pdf', 'png'] if args.format == 'both' else [args.format]
 
@@ -655,23 +715,20 @@ def main():
     for fmt in formats:
         dpi = args.dpi if fmt == 'png' else None
 
-        file1 = f"{output_prefix}_velocity.{fmt}"
-        file2 = f"{output_prefix}_normal_stresses.{fmt}"
-        file3 = f"{output_prefix}_shear_vorticity.{fmt}"
-        file4 = f"{output_prefix}_spectra_2d.{fmt}"
-        file5 = f"{output_prefix}_total_stress.{fmt}"
+        to_save = [(fig1, 'velocity'), (fig2, 'normal_stresses'),
+                   (fig3, 'shear_vorticity'), (fig5, 'total_stress')]
+        if fig4 is not None:
+            to_save.append((fig4, 'spectra_2d'))
+        to_save.extend(spectra_figs)
+        if fig6 is not None:
+            to_save.append((fig6, 'skewness'))
+        if fig7 is not None:
+            to_save.append((fig7, 'canopy_drag_profile'))
 
-        fig1.savefig(file1, dpi=dpi, bbox_inches='tight')
-        fig2.savefig(file2, dpi=dpi, bbox_inches='tight')
-        fig3.savefig(file3, dpi=dpi, bbox_inches='tight')
-        fig4.savefig(file4, dpi=dpi, bbox_inches='tight')
-        fig5.savefig(file5, dpi=dpi, bbox_inches='tight')
-
-        print(f"  Saved: {file1}")
-        print(f"  Saved: {file2}")
-        print(f"  Saved: {file3}")
-        print(f"  Saved: {file4}")
-        print(f"  Saved: {file5}")
+        for fig, tag in to_save:
+            path = f"{output_prefix}_{tag}.{fmt}"
+            fig.savefig(path, dpi=dpi, bbox_inches='tight')
+            print(f"  Saved: {path}")
 
     print("\nPlotting completed successfully!")
 

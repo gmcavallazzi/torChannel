@@ -364,7 +364,8 @@ class ChannelFlow:
                 self.z_c, self.z_f, self.dz_c, self.dz_f,
                 self.dx, self.dy, self.nu,
                 self.Re_tau, z_plus_target=z_plus_target,
-                device=self.device
+                device=self.device,
+                spectra_z=stats_config.get('spectra_z', None)
             )
 
             # Load statistics state if restarting
@@ -968,8 +969,15 @@ class ChannelFlow:
                 if self.turbulence_stats.n_samples == 0:
                     print(f"  [Stats] Starting statistics collection at t = {self.time:.3f}", flush=True)
 
+                # Canopy drag profile from this step's IBM forcing (ring i <-> interior cell i)
+                fx_prof = None
+                if self.canopy is not None:
+                    fx_prof = torch.zeros(self.nz, dtype=torch.float64, device=self.device)
+                    fx_prof[:self.canopy.n_rings] = self.canopy.last_fx_rings
+
                 # Accumulate statistics (all operations stay on device)
-                self.turbulence_stats.accumulate_statistics(self.u, self.v, self.w, u_tau_for_stats)
+                self.turbulence_stats.accumulate_statistics(self.u, self.v, self.w, u_tau_for_stats,
+                                                            fx_profile=fx_prof)
 
             # Save time series data and flow fields every n_save steps
             if step % self.n_save == 0:

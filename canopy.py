@@ -174,6 +174,11 @@ class RigidCanopyIBM:
             slice_vol = self.dx * self.dy * self.ring_dz
         self.dV = slice_vol.view(1, -1, 1).expand(self.n_fil, -1, m).reshape(-1).contiguous()
 
+        # Ring index per marker (marker order is (filament, ring, azimuth)):
+        # used to bin the IBM force into a wall-normal drag profile
+        self.ring_id = (torch.arange(self.N_L, device=self.device) // m) % self.n_rings
+        self.last_fx_rings = torch.zeros(self.n_rings, dtype=torch.float64, device=self.device)
+
     # ------------------------------------------------------------------ RKPM weights
 
     def _component_layout(self, comp):
@@ -363,6 +368,7 @@ class RigidCanopyIBM:
         acc_u = torch.zeros((), dtype=torch.float64, device=self.device)
         acc_v = torch.zeros((), dtype=torch.float64, device=self.device)
         acc_w = torch.zeros((), dtype=torch.float64, device=self.device)
+        fx_rings = torch.zeros(self.n_rings, dtype=torch.float64, device=self.device)
         for _ in range(self.n_iter):
             dU = -gain_t * self.interpolate(u, 'u')
             dV = -gain_t * self.interpolate(v, 'v')
@@ -370,9 +376,13 @@ class RigidCanopyIBM:
             self._spread_increment(u, dU, 'u')
             self._spread_increment(v, dV, 'v')
             self._spread_increment(w, dW, 'w')
-            acc_u = acc_u + (dU * self.dV_eff['u']).sum()
+            mom_u = dU * self.dV_eff['u']
+            acc_u = acc_u + mom_u.sum()
             acc_v = acc_v + (dV * self.dV_eff['v']).sum()
             acc_w = acc_w + (dW * self.dV_eff['w']).sum()
+            fx_rings.index_add_(0, self.ring_id, mom_u)
+        # Streamwise force per wall-normal level (ring i <-> canopy cell i)
+        self.last_fx_rings = fx_rings / dt_t
         # Force ON the fluid = momentum added per unit time (negative x-force = drag)
         return torch.stack([acc_u, acc_v, acc_w]) / dt_t
 

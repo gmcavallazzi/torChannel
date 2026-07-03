@@ -53,9 +53,12 @@ canopy:
 statistics:
   n_stats: 100
   t_stats: 9.0
-  z_plus_target: 462.8
   output_file: turbulence_stats.npz
   state_file: turbulence_stats_state.npz
+  spectra_z:
+  - 0.125
+  - 0.25
+  - 0.75
 output:
   results_folder: results_canopy_monti
   n_out: 50
