@@ -99,11 +99,19 @@ def main():
 
     t = data['time']
 
-    def add_ref(ax, series, val, color, label):
+    def add_ref(ax, series, val, color, label, force=False):
         """Reference line only if it doesn't wreck the axis: the axes always
-        follow the data; a far-away reference becomes an off-scale note."""
+        follow the data; a far-away reference becomes an off-scale note.
+        force=True always draws the line and widens the axis to include it."""
         lo, hi = np.nanmin(series), np.nanmax(series)
         span = max(hi - lo, 0.05 * abs(0.5 * (hi + lo)), 1e-12)
+        if force:
+            ax.axhline(val, color=color, ls='--', lw=1, label=label)
+            cur = ax.get_ylim()
+            pad = 0.06 * (max(hi, val) - min(lo, val))
+            ax.set_ylim(min(cur[0], lo - pad, val - pad),
+                        max(cur[1], hi + pad, val + pad))
+            return True
         if lo - 1.5 * span <= val <= hi + 1.5 * span:
             ax.axhline(val, color=color, ls='--', lw=1, label=label)
             return True
@@ -124,13 +132,12 @@ def main():
 
     ax_ut.plot(t, data['u_tau'], 'k-', lw=1)
     if u_in_eq is not None:
-        drawn = add_ref(ax_ut, data['u_tau'], u_in_eq, 'C0',
-                        rf'est.\ eq.\ ({args.r_in:.2f}$\,u_{{\tau,out}}$)')
+        add_ref(ax_ut, data['u_tau'], u_in_eq, 'C0',
+                rf'est.\ eq.\ ({args.r_in:.2f}$\,u_{{\tau,out}}$)', force=True)
         # curiosity marker: half the expected (tip) friction velocity
-        drawn |= add_ref(ax_ut, data['u_tau'], 0.5 * u_out_eq, 'C2',
-                         rf'$u_{{\tau,out}}/2$')
-        if drawn:
-            ax_ut.legend(loc='best', fontsize=9)
+        add_ref(ax_ut, data['u_tau'], 0.5 * u_out_eq, 'C2',
+                rf'$u_{{\tau,out}}/2$', force=True)
+        ax_ut.legend(loc='best', fontsize=9)
     ax_ut.set_ylabel(r'$u_{\tau,\mathrm{bed}}$')
     ax_ut.set_title(r'bed friction velocity')
 
