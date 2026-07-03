@@ -31,6 +31,8 @@ def main():
                     help='heights of the two x-y cuts (default: h/2 and h+0.05)')
     ap.add_argument('--out', default=None, help='output png (default: figures_local/<name>_cuts.png)')
     ap.add_argument('--field', default='u', choices=['u', 'v', 'w'], help='component to plot')
+    ap.add_argument('--y-cut', type=float, default=None,
+                    help='y location of the x-z cut (default: mid-span)')
     args = ap.parse_args()
 
     d = np.load(args.fields)
@@ -53,7 +55,8 @@ def main():
     z1, z2 = args.z_cuts if args.z_cuts else (0.5 * args.h, args.h + 0.05)
     k1 = int(np.argmin(np.abs(zc - z1)))
     k2 = int(np.argmin(np.abs(zc - z2)))
-    j_mid, i_mid = ny // 2, nx // 2
+    j_mid = ny // 2 if args.y_cut is None else int(np.argmin(np.abs(y - args.y_cut)))
+    i_mid = nx // 2
 
     vmin, vmax = np.percentile(fi, 0.5), np.percentile(fi, 99.5)
     cmap, shade = 'viridis', 'gouraud'
