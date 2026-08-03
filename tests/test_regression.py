@@ -187,6 +187,30 @@ def test_open_channel_delta_is_full_height():
     assert closed.delta == pytest.approx(0.5)
 
 
+@pytest.mark.parametrize("top_bc,expected_delta", [("neumann", 1.0), ("dirichlet", 0.5)])
+def test_statistics_record_their_own_geometry(top_bc, expected_delta):
+    """Lz, delta and the wall BC must travel WITH the statistics.
+
+    Post-processing used to reconstruct these -- Lz from z_c[0] + z_c[-1] (only
+    valid on a symmetric grid) and delta as a hard-coded Lz/2 -- which is how
+    the open-channel u_tau bug survived. Recording them removes the inference.
+    """
+    stats, _ = _stats(top_bc)
+    stats.n_samples = 1
+    nz = stats.nz
+    for name in ("U_sum", "uu_sum", "vv_sum", "ww_sum", "uw_sum",
+                 "uuu_sum", "www_sum", "fx_profile_sum"):
+        setattr(stats, name, torch.zeros(nz, dtype=torch.float64))
+    stats.U_sum = torch.linspace(0.01, 1.0, nz, dtype=torch.float64)
+
+    out = stats.finalize_statistics()
+    for key in ("Lz", "delta", "top_wall_bc_type"):
+        assert key in out, f"{key} is not recorded in the statistics"
+    assert out["Lz"] == pytest.approx(1.0)
+    assert out["delta"] == pytest.approx(expected_delta)
+    assert out["top_wall_bc_type"] == top_bc
+
+
 def test_open_channel_u_tau_ignores_the_free_surface():
     """Regression: u_tau must not average in the free-surface velocity.
 

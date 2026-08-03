@@ -637,6 +637,18 @@ def main():
     # dz_f sums to Lz exactly; both file kinds may carry it.
     dz_f_from_file = data['dz_f'] if 'dz_f' in data.files else None
 
+    # Geometry recorded by the solver. Files written before this was added lack
+    # these keys, hence the fallbacks below -- but when present they are the
+    # truth and override both the config and the auto-detection heuristic.
+    Lz_from_file = float(data['Lz']) if 'Lz' in data.files else None
+    delta_from_file = float(data['delta']) if 'delta' in data.files else None
+    if 'top_wall_bc_type' in data.files:
+        bc_recorded = str(data['top_wall_bc_type'])
+        if bc_recorded == 'neumann' and not open_channel:
+            print("  Open channel: recorded in the statistics file "
+                  "(top_wall_bc_type = neumann)")
+        open_channel = (bc_recorded == 'neumann')
+
     # Profile-based sanity check. On a closed channel U_mean[-1] is a near-wall
     # value and so is small; a large one means a free-slip top that was not
     # declared, which would silently inflate u_tau.
@@ -656,20 +668,29 @@ def main():
     # z_c[0] + z_c[-1] is only equal to Lz on a SYMMETRIC grid; with 'bottom' or
     # 'double' stretching it is not (0.9915 vs 1.0 on the Re_tau=180 open-channel
     # case). dz_f sums to Lz exactly, so prefer it when the file has it.
-    if dz_f_from_file is not None:
+    # Prefer what the solver recorded; fall back only for older files.
+    if Lz_from_file is not None:
+        Lz = Lz_from_file
+        print(f"  Domain height Lz = {Lz:.6f} (recorded by the solver)")
+    elif dz_f_from_file is not None:
         Lz = float(np.sum(dz_f_from_file))
         print(f"  Domain height Lz = {Lz:.6f} (exact, from dz_f)")
     else:
         Lz = z_c[0] + z_c[-1]
-        print(f"  Domain height Lz = {Lz:.6f} (estimated from z_c; assumes a "
-              f"symmetric grid)")
+        print(f"  Domain height Lz = {Lz:.6f} (ESTIMATED from z_c -- assumes a "
+              f"symmetric grid; rerun to record it)")
 
     # delta is BC-dependent: Lz/2 for a closed channel (two walls), Lz for an
-    # open channel (one wall + free-slip top). The canopy branch below overrides
-    # this again with Lz - h.
-    delta = Lz if open_channel else Lz / 2
-    if open_channel:
-        print(f"  Open channel (free-slip top): delta = Lz = {delta:.6f}")
+    # open channel, Lz - h for a canopy. The solver already knows which, so use
+    # its value rather than re-deriving one. The canopy branch below may still
+    # override with the Monti convention when --canopy-height is given.
+    if delta_from_file is not None:
+        delta = delta_from_file
+        print(f"  delta = {delta:.6f} (recorded by the solver)")
+    else:
+        delta = Lz if open_channel else Lz / 2
+        if open_channel:
+            print(f"  Open channel (free-slip top): delta = Lz = {delta:.6f}")
 
     # Compute dU/dz correctly from U_mean (ignore dUdz_mean from file)
     # Note: omega_y_mean ≈ dU/dz since dW/dx = 0 statistically

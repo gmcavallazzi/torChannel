@@ -392,6 +392,13 @@ class TurbulenceStats:
             'dz_f': np.asarray(self.dz_f.detach().cpu().numpy()),
             'Lx': self.Lx,
             'Ly': self.Ly,
+            # Geometry travels WITH the statistics. Post-processing previously
+            # had to reconstruct these: Lz from z_c[0] + z_c[-1] (valid only on
+            # a symmetric grid) and delta as a hard-coded Lz/2 (wrong for open
+            # channels and canopies). Recording them removes the guesswork.
+            'Lz': self.Lz,
+            'delta': self.delta,
+            'top_wall_bc_type': self.top_wall_bc_type,
             'U_mean': U_mean,
             'uu_mean': uu_mean,
             'vv_mean': vv_mean,
@@ -479,6 +486,10 @@ class TurbulenceStats:
             # Grid truth travels with the state (plotting needs no reconstruction)
             'z_c': np.asarray(self.z_c[1:self.nz+1].detach().cpu().numpy()),
             'dz_f': np.asarray(self.dz_f.detach().cpu().numpy()),
+            'Lz': self.Lz,
+            'delta': self.delta,
+            'top_wall_bc_type': self.top_wall_bc_type,
+            'nu': self.nu,
         }
         if self.spectra_z is not None:
             state['spectra_z'] = np.asarray(self.spectra_z_actual)
