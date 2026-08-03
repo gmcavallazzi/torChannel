@@ -7,8 +7,10 @@
 # Both cases have Lz = 1, so the 'interpolate' initializer applies directly; x
 # and y are mapped proportionally from 4pi x 2pi onto 2pi x pi.
 #
-# Box: 2pi x pi, matching the Moser-Kim-Mansour Re_tau=590 box, so
-# `--reference mkm590` is a like-for-like box comparison. `--reference lm550`
+# Box: 2pi x pi. This MATCHES MKM chan590 exactly -- verified from their own
+# spectra files, where the wavenumber spacing gives the domain directly
+# (dk_x = 1.0 -> L_x = 2pi, dk_z = 2.0 -> L_z = pi). So `--reference mkm590` is
+# a genuinely like-for-like comparison in both box and bulk Reynolds number. `--reference lm550`
 # (Lee & Moser, Re_tau=543) is closer in Reynolds number but used a much larger
 # 8pi x 3pi box.
 #

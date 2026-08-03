@@ -7,6 +7,12 @@
 # no_actuation_lumley/fld_0120.bin -> Re_tau = 180.7, u_bulk = 1.0), converted
 # with scripts/cans_to_npz.py and regridded by the 'interpolate' initializer.
 #
+# BOX: 4pi x 2pi. The streamwise extent matches MKM chan180 (4pi) but the
+# SPANWISE does NOT: MKM used 4pi/3 = 4.189, this uses 2pi = 6.283, i.e. 1.5x
+# wider. Verified from MKM's own spectra (dk_z = 1.5 -> L_z = 4pi/3), not from
+# memory. A wider span is not a defect -- it constrains large-scale structures
+# less -- but the outer-layer comparison is not like-for-like.
+#
 # NOTE the CaNS box is 10.68 x 3.2 and this box is 4pi x 2pi, so 'interpolate'
 # stretches the seed ~18% in x and ~2x in y. Spanwise streak spacing therefore
 # arrives wrong and needs the transient below to re-equilibrate. This also means
