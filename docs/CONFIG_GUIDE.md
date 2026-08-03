@@ -1,6 +1,6 @@
 # TorChannel Configuration Guide
 
-This document provides a comprehensive reference for all configuration parameters in `config.yaml`.
+This document provides a comprehensive reference for all configuration parameters. Working examples live in `examples/` (there is no top-level `config.yaml`).
 
 ---
 
@@ -443,7 +443,7 @@ compute:
 
 ### Performance
 
-- GPU provides significant speedup (typically 10-50× vs CPU)
+- GPU is essential for production grids (the CPU path is for debugging only)
 - Speedup increases with grid size
 - Small grids (<64³) may not benefit so much from GPU
 
@@ -658,7 +658,7 @@ statistics:
 
 ### Performance
 
-1. **Use GPU** for significant speedup (10-50×)
+1. **Use GPU**; see the measured throughput in docs/IMPLEMENTATION.md
 
 2. **Increase grid size** to improve GPU utilization
 

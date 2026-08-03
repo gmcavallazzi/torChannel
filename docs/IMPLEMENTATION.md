@@ -33,7 +33,7 @@ solver.py (ChannelFlow class)
    ├→ operators.py (spatial operators)
    ├→ projection_fft.py (FFT Poisson solver)
    ├→ projection.py (direct solver, fallback)
-   └→ statistics.py (turbulence statistics)
+   └→ turbstats.py (turbulence statistics)
 
 Post-processing:
    ├→ post_process.py (field visualization)
@@ -64,7 +64,7 @@ Post-processing:
 
 **Usage**:
 ```bash
-python main.py [config.yaml]
+torchannel-run <config.yaml>        # or: python main.py <config.yaml>
 ```
 
 ---
@@ -284,7 +284,7 @@ for step in range(n_steps):
 
 ---
 
-### statistics.py
+### turbstats.py
 
 **Purpose**: Turbulence statistics collection
 
@@ -337,7 +337,7 @@ for step in range(n_steps):
 **Usage**:
 ```bash
 # Full post-processing
-python post_process.py results/fields.npz --config config.yaml
+python post_process.py results/fields.npz --config examples/re180_open/config.yaml
 
 # Timeseries only
 python post_process.py results/timeseries.npz --timeseries-only --Re 2870
@@ -358,7 +358,7 @@ python post_process.py results/timeseries.npz --timeseries-only --Re 2870
 
 **Usage**:
 ```bash
-python plot_statistics.py results/turbulence_stats.npz --config config.yaml
+python plot_statistics.py results/turbulence_stats.npz --config examples/re180_open/config.yaml
 ```
 
 **Output**: Multiple PNG/PDF files with publication-quality plots
@@ -718,7 +718,9 @@ pip install numpy matplotlib pyyaml
 
 **Speedup factors**:
 - Grid size dependent
-- Typically 10-50× faster than CPU
+- Measured: 0.96 s/step at 576x432x260 (64.7M cells) in float64 on an
+  NVIDIA GB10, with the canopy IBM active (~1.5e-8 s per cell per step).
+  The previous "10-50x faster than CPU" claim here was never measured.
 - Larger grids → better GPU utilization
 
 **GPU Memory Requirements**:
