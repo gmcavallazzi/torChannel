@@ -41,16 +41,22 @@ boundary_conditions:
     type: "dirichlet"   # no-slip: closed channel
 
 initialization:
-  # Mirrored from the converged open-channel field by
-  # scripts/mirror_to_full_channel.py --shift-y --noise 0.01
+  # Restarted from the field left by the pre-47fe834 run. That run carried the
+  # advection index bug (one x-plane and one y-plane never advected, a spurious
+  # +0.57% streamwise momentum source), so its STATISTICS are discarded -- but
+  # the field itself is a perfectly good fully-developed closed-channel state at
+  # the right Re_b, which saves re-running the 100 t.u. spin-up from the
+  # mirrored seed. The 100 t.u. transient below re-equilibrates it to the
+  # corrected operator before any sample is taken.
   #
-  # The spanwise shift is NOT optional. Reflection about the centreline is an
-  # exact symmetry of Navier-Stokes, so a perfectly mirrored field sits on an
-  # invariant manifold and stays symmetric indefinitely. Shifting the mirrored
-  # half by Ly/2 (many streak spacings) decorrelates the two halves at once --
-  # measured correlation of u across the centreline planes: -0.20.
+  # To rebuild from scratch instead, point field_file at
+  # examples/re180_closed/seed_full180.npz, produced by
+  # scripts/mirror_to_full_channel.py --noise 0.01 (the centreline perturbation
+  # is not optional: reflection about the centreline is an exact symmetry of
+  # Navier-Stokes, so a cleanly mirrored field sits on an invariant manifold and
+  # would stay symmetric indefinitely).
   type: "parabolic"                 # ignored: field_file makes this a restart
-  field_file: "examples/re180_closed/seed_full180.npz"
+  field_file: "results_re180_closed_prebugfix/fields.npz"
   reset_time: true
 
 solver:
