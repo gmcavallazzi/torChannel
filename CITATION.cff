@@ -1,0 +1,77 @@
+cff-version: 1.2.0
+title: "torChannel: GPU-accelerated DNS of turbulent channel flow in PyTorch"
+message: "If you use this software, please cite it as below."
+type: software
+authors:
+  - family-names: Cavallazzi
+    given-names: Giorgio
+repository-code: "https://github.com/gmcavallazzi/torChannel"
+license: MIT
+version: 0.1.0
+abstract: >-
+  A single-GPU direct numerical simulation code for incompressible turbulent
+  channel flow, implemented in Python/PyTorch. Second-order staggered finite
+  volumes, IMEX time integration with implicit wall-normal diffusion, and an
+  FFT-based pressure projection. Includes an RKPM immersed-boundary method for
+  rigid filamentous canopies.
+keywords:
+  - computational fluid dynamics
+  - direct numerical simulation
+  - turbulence
+  - channel flow
+  - immersed boundary method
+  - PyTorch
+  - GPU
+
+references:
+  - type: article
+    title: "On the solidity parameter in canopy flows"
+    authors:
+      - family-names: Monti
+        given-names: Alessandro
+      - family-names: Nicholas
+        given-names: Simon
+      - family-names: Omidyeganeh
+        given-names: Mohammad
+      - family-names: Pinelli
+        given-names: Alfredo
+      - family-names: Rosti
+        given-names: "Marco E."
+    journal: "Journal of Fluid Mechanics"
+    year: 2022
+    volume: 945
+    start: A17
+    notes: "Reference case for the rigid-canopy IBM."
+  - type: article
+    title: >-
+      Direct numerical simulation of turbulent channel flow up to
+      Re_tau = 590
+    authors:
+      - family-names: Moser
+        given-names: "Robert D."
+      - family-names: Kim
+        given-names: John
+      - family-names: Mansour
+        given-names: "Nagi N."
+    journal: "Physics of Fluids"
+    year: 1999
+    volume: 11
+    issue: 4
+    start: 943
+    end: 945
+    notes: "Bundled reference profiles (mkm180, mkm590)."
+  - type: article
+    title: >-
+      Direct numerical simulation of turbulent channel flow up to
+      Re_tau = 5200
+    authors:
+      - family-names: Lee
+        given-names: Myoungkyu
+      - family-names: Moser
+        given-names: "Robert D."
+    journal: "Journal of Fluid Mechanics"
+    year: 2015
+    volume: 774
+    start: 395
+    end: 415
+    notes: "Bundled reference profiles (lm550)."

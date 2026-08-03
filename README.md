@@ -1,259 +1,208 @@
-# TorChannel
+# torChannel
 
-**GPU-accelerated Direct Numerical Simulation (DNS) for turbulent channel flow**
+**GPU-accelerated DNS of turbulent channel flow, written in PyTorch.**
 
-TorChannel is a high-performance Python/PyTorch implementation of DNS for incompressible turbulent channel flow. It features GPU acceleration, advanced time integration schemes, comprehensive turbulence statistics collection, and robust restart capabilities.
+torChannel solves the incompressible Navier–Stokes equations on a staggered grid
+with a second-order finite-volume discretisation, an IMEX time integrator, and an
+FFT-based pressure projection. It runs on a single GPU and is written entirely in
+Python — every field is a `torch.Tensor` and every operator is a tensor op, so the
+solver can be read, modified, and driven from a Python loop rather than only run as
+a batch job.
 
----
-
-## Features
-
-- **GPU Acceleration**: Fully vectorized PyTorch implementation with CUDA support
-- **Advanced Time Integration**: IMEX scheme (implicit wall-normal diffusion, explicit advection) with adaptive timestepping
-- **FFT-based Poisson Solver**: Fast pressure projection using FFT in periodic directions
-- **Non-uniform Stretched Grids**: Hyperbolic tangent stretching for efficient near-wall resolution
-- **Turbulence Statistics**: On-the-fly computation of Reynolds stresses, mean profiles, and 2D energy spectra
-- **Restart Capability**: Save/load flow fields and accumulated statistics without losing progress
-- **Bulk Velocity Forcing**: Maintains constant flow rate (Re_bulk) by adjusting pressure gradient
-- **Flexible Configuration**: YAML-based configuration with extensive options
+It also includes an RKPM immersed-boundary method for rigid filamentous canopies,
+following Monti et al. (2022).
 
 ---
 
-## Quick Start
+## Install
 
-### Installation
-
-**Requirements:**
-- Python >= 3.8
-- PyTorch >= 1.10 (with optional CUDA support)
-- NumPy >= 1.20
-- Matplotlib >= 3.3
-- PyYAML >= 5.4
-
-**CPU-only setup:**
 ```bash
-pip install torch numpy matplotlib pyyaml
+git clone https://github.com/gmcavallazzi/torChannel.git
+cd torChannel
+pip install -e ".[plot]"        # add ,test for pytest
 ```
 
-**GPU setup (CUDA):**
+Requires Python ≥ 3.9 and PyTorch ≥ 1.10. The core solver needs only `torch`,
+`numpy` and `pyyaml`; `[plot]` adds `matplotlib`, `scipy` and `scikit-image` for
+post-processing.
+
+## Run
+
 ```bash
-# Install PyTorch with CUDA support (adjust CUDA version as needed)
-pip install torch --index-url https://download.pytorch.org/whl/cu118
-pip install numpy matplotlib pyyaml
+torchannel-run examples/re180_open/config.yaml
 ```
 
-### Running a Simulation
+or equivalently `python main.py examples/re180_open/config.yaml`. The bundled
+example is a Re_τ = 180 open channel on 192×192×128 — see
+[`examples/re180_open/README.md`](examples/re180_open/README.md), which also
+documents how to build its initial field.
 
-1. **Configure the simulation** by editing `config.yaml` (see [Configuration Guide](docs/CONFIG_GUIDE.md))
+Post-process:
 
-2. **Run the simulation:**
-   ```bash
-   python main.py config.yaml
-   ```
+```bash
+# Statistics, overlaid on published DNS
+python plot_statistics.py results_re180_open/turbulence_stats.npz \
+    --config examples/re180_open/config.yaml --reference mkm180
 
-3. **Visualize results:**
-   ```bash
-   # Plot flow field slices and mean velocity profile
-   python post_process.py results/fields.npz --config config.yaml
+# From a mid-run checkpoint instead of the final file
+python plot_statistics.py results_re180_open/turbulence_stats_state.npz \
+    --checkpoint --config examples/re180_open/config.yaml
 
-   # Plot timeseries data only
-   python post_process.py results/timeseries.npz --timeseries-only --Re 2870
-
-   # Plot turbulence statistics
-   python plot_statistics.py results/turbulence_stats.npz --config config.yaml
-   ```
-
-### Example Configuration
-
-A typical configuration for Re_τ = 180:
-
-```yaml
-grid:
-  nx: 192    # Streamwise points
-  ny: 192    # Spanwise points
-  nz: 128    # Wall-normal points
-
-domain:
-  Lx: 12.567  # 4π (streamwise length)
-  Ly: 4.189   # 4π/3 (spanwise length)
-  Lz: 2.0     # Channel height (2δ)
-
-flow:
-  Re: 2870.0      # Bulk Reynolds number
-  Re_tau: 180.0   # Target friction Reynolds number
-  U_bulk: 1.0     # Target bulk velocity
-  gamma: 2.6      # Grid stretching parameter
-
-time:
-  dt: 0.005
-  CFL_target: 0.25
-  scheme: "IMEX"  # IMEX, AB2, or FE
-
-output:
-  results_folder: results
-  n_out: 200      # Print diagnostics every 200 steps
-  n_save: 4000    # Save fields every 4000 steps
-
-statistics:
-  enabled: true
-  n_stats: 200     # Collect statistics every 200 steps
-  t_stats: 50.0    # Start collecting after t=50
-  z_plus_target: 15.0  # Height for 2D spectra
+# Fields, timeseries, snapshots
+python post_process.py results_re180_open/fields.npz --config examples/re180_open/config.yaml
+python scripts/plot_timeseries.py slurm-re180-open-319.out
+python scripts/plot_snapshot.py results_re180_open/fields.npz
 ```
+
+Figures use `text.usetex`; on a cluster you may need `module load texlive` first.
 
 ---
 
-## Directory Structure
+## What it does and does not do
 
-```
-TorChannel/
-├── README.md                   # This file
-├── LICENSE                     # MIT License
-├── config.yaml                 # Main configuration file
-├── main.py                     # Entry point
-├── solver.py                   # Main simulation class
-├── operators.py                # Spatial operators
-├── projection_fft.py           # FFT Poisson solver
-├── projection.py               # Direct Poisson solver (fallback)
-├── initflow.py                 # Flow initialization
-├── utils.py                    # Grid generation, I/O, utilities
-├── statistics.py               # Turbulence statistics
-├── plot_statistics.py          # Statistics visualization
-├── post_process.py             # Flow field visualization
-├── generate_grid.py            # Grid generation utility
-├── docs/
-│   ├── CONFIG_GUIDE.md         # Configuration reference
-│   ├── NUMERICAL_METHODS.md    # Equations and discretization
-│   └── IMPLEMENTATION.md       # Code architecture details
-└── results/                    # Output directory (created automatically)
-    ├── fields.npz              # Latest flow field checkpoint
-    ├── fields_final.npz        # Final flow field
-    ├── timeseries.npz          # Time history data
-    ├── turbulence_stats.npz    # Averaged statistics
-    └── turbulence_stats_state.npz  # Statistics checkpoint
-```
+Being explicit, so you can tell in one minute whether it fits your problem.
 
----
+**Supported**
 
-## Output Files
+| | |
+|---|---|
+| Equations | Incompressible Navier–Stokes, constant density, constant viscosity |
+| Geometry | Plane channel. Periodic in x and y; walls in z |
+| Boundary conditions | Bottom wall always no-slip. Top wall `dirichlet` (closed channel) or `neumann` (free-slip/symmetry — open channel) |
+| Time integration | `IMEX` (AB2 on advection + xy-diffusion, implicit z-diffusion) for production; `FE` for testing |
+| Pressure | FFT in x,y + Thomas in z, with modified wavenumbers; a dense direct solver for small cases |
+| Grids | Uniform in x,y. In z: `symmetric`, `bottom`, `hybrid`, or `double` (tanh clustering at a bed and at canopy tips) |
+| Forcing | Constant flow rate, via a feedback controller on the bulk velocity |
+| Initialisation | `parabolic`, `uniform`, `vortices` (+ seeded random perturbations), restart from a checkpoint, or `interpolate` from a field on a *different* grid |
+| Immersed boundary | Rigid filamentous canopies (RKPM direct forcing) — see [`docs/CANOPY.md`](docs/CANOPY.md) |
+| Statistics | Mean profile, Reynolds stresses ⟨u'u'⟩ ⟨v'v'⟩ ⟨w'w'⟩ ⟨u'w'⟩, third moments, canopy drag profile, 2D premultiplied spectra at arbitrary heights. Accumulated as running sums, so restarts lose nothing |
 
-### Flow Fields
-- **fields_init.npz**: Initial flow field
-- **fields.npz**: Latest checkpoint (updated every `n_save` steps)
-- **fields_final.npz**: Final flow field at end of simulation
-
-### Time Series
-- **timeseries.npz**: Time history of bulk velocity, friction velocity (u_τ), and forcing
-- Automatically appended on restart
-
-### Turbulence Statistics
-- **turbulence_stats.npz**: Final averaged statistics
-  - Mean velocity profile U(z)
-  - Reynolds stresses: u'u'(z), v'v'(z), w'w'(z), u'w'(z)
-  - 2D premultiplied energy spectra at z⁺ ≈ 15
-- **turbulence_stats_state.npz**: Statistics checkpoint (running sums + sample count)
-  - Allows restarting statistics accumulation without losing progress
-
-### Visualization
-- **grid_plot.png**: Non-uniform grid distribution
-- **post_slices_*.png**: Flow field slices (xy, xz, yz planes)
-- **post_profile.png**: Mean streamwise velocity profile
-- **post_timeseries.png**: Time evolution of u_bulk, u_τ, forcing
-- **turbulence_stats_plots_*.png**: Statistics plots (velocity, stresses, spectra)
-
----
-
-## Restarting Simulations
-
-TorChannel supports seamless restart from checkpoints:
-
-**1. Restart flow field:**
-```yaml
-initialization:
-  field_file: "results/fields.npz"  # Path to checkpoint
-  reset_time: false                  # Continue from saved time
-```
-
-**2. Restart statistics accumulation:**
-```yaml
-statistics:
-  restart_state_file: "results/turbulence_stats_state.npz"
-```
-
-On restart:
-- Results folder is **preserved** (no cleaning)
-- Timeseries data is **automatically appended**
-- Statistics accumulation **continues** from checkpoint
-
----
-
-## Documentation
-
-- **[Configuration Guide](docs/CONFIG_GUIDE.md)**: Detailed explanation of all configuration parameters
-- **[Numerical Methods](docs/NUMERICAL_METHODS.md)**: Governing equations, discretization schemes, and solution methods
-- **[Implementation Details](docs/IMPLEMENTATION.md)**: Code architecture, PyTorch implementation, and performance considerations
+**Not supported.** No scalar transport, temperature or buoyancy. No LES or wall
+model — this is DNS, and the resolution burden is yours. No inflow/outflow or
+streamwise development. No constant-pressure-gradient forcing (flow rate only).
+No flexible or moving immersed bodies. `RK3` is a stub that raises
+`NotImplementedError`. **Single GPU only** — there is no MPI or domain
+decomposition, which is the hard ceiling on problem size.
 
 ---
 
 ## Validation
 
-TorChannel has been validated against established DNS databases:
+The bundled Re_τ = 180 open-channel case is the reference configuration.
+`plot_statistics.py --reference` overlays published DNS directly:
 
-- **Re_τ = 180**: Results consistent with Moser et al. (1999) channel flow database
-- Mean velocity profiles match log-law and viscous sublayer predictions
-- Reynolds stress profiles show correct near-wall scaling
-- Friction velocity u_τ converges to target value within < 1% error
+| dataset | flag | Re_τ |
+|---|---|---|
+| Moser, Kim & Mansour (1999) | `--reference mkm180` | 178.1 |
+| Moser, Kim & Mansour (1999) | `--reference mkm590` | 587.2 |
+| Lee & Moser (2015) | `--reference lm550` | 543.5 |
+
+These ship as small CSVs under `torchannel/data/reference/`, regenerable with
+`python scripts/fetch_reference_data.py`. That script exists rather than a raw
+download because the published data use **y** as the wall-normal direction while
+torChannel uses **z**, so the Reynolds stresses must be remapped
+(`R_vv → ww`, `R_ww → vv`, `R_uv → uw`), not merely renamed.
+
+Two caveats that belong on any figure you produce:
+
+- The reference data are **closed**-channel profiles. Overlaid on an open channel
+  they agree near the wall; the difference toward the centreline is physical, not
+  an error — a free-slip top suppresses motions that cross a closed channel's
+  centreline.
+- The bundled example is seeded from a CaNS field in a different box, so
+  comparison against that baseline is **statistical, not like-for-like**.
+
+Beyond that, `pytest -m "not gpu"` runs an assertion-based suite covering grid
+generation, the tridiagonal solver, divergence-free projection under both
+pressure BCs, and the reference-data axis convention. CI runs it on every push.
 
 ---
 
-## References
+## Performance notes
 
-**Key DNS Literature:**
+Measured on an NVIDIA GB10, `float64` throughout: **0.96 s/step at 576×432×260
+(64.7 M cells)** with the canopy IBM active — about 1.5×10⁻⁸ s per cell per step.
 
-1. Kim, J., Moin, P., & Moser, R. (1987). "Turbulence statistics in fully developed channel flow at low Reynolds number." *Journal of Fluid Mechanics*, 177, 133-166.
+Everything is `torch.float64`. That is deliberate for a DNS, but note that fp64
+runs at 1/64 of fp32 on consumer NVIDIA hardware, so a datacenter-class card is
+currently the practical requirement. Configurable mixed/single precision is in
+progress.
 
-2. Moser, R. D., Kim, J., & Mansour, N. N. (1999). "Direct numerical simulation of turbulent channel flow up to Re_τ = 590." *Physics of Fluids*, 11(4), 943-945.
+### GPU notes (GB10 / sm_121)
 
-3. Pope, S. B. (2000). *Turbulent Flows*. Cambridge University Press.
+The GB10 cannot NVRTC-compile the legacy TorchScript fuser, so runs there need
+`PYTORCH_JIT=0` (the `@torch.jit.script` decorators become passthroughs). Two
+opt-in speed layers replace it:
 
-**DNS Database:**
-- [Johns Hopkins Turbulence Database](http://turbulence.pha.jhu.edu/)
+```bash
+PYTORCH_JIT=0 TORCHANNEL_COMPILE=1 TORCHANNEL_POISSON_CUDAGRAPH=1 \
+    torchannel-run examples/re180_open/config.yaml
+```
+
+- `TORCHANNEL_COMPILE=1` — torch.compile (Inductor/Triton) on the hot kernels
+- `TORCHANNEL_POISSON_CUDAGRAPH=1` — CUDA-graph capture of the FFT-Poisson solve
+
+A CUDA-capability warning at startup on this card is expected and harmless.
 
 ---
+
+## Configuration
+
+YAML. See [`docs/CONFIG_GUIDE.md`](docs/CONFIG_GUIDE.md) for the full reference and
+`examples/` for working files. Three things that reliably catch people out:
+
+- **Statistics are enabled by `statistics.n_stats > 0`.** Some older configs carry
+  an `enabled:` key; the code ignores it.
+- **On an open channel, use `statistics.spectra_z`** (a list of physical heights),
+  not `z_plus_target`. The latter is a legacy two-wall path that assumes
+  δ = L_z/2 and pairs a near-wall plane with one at the opposite wall.
+- **`initialization.type: interpolate` is not a restart.** It regrids a field from
+  a different grid or domain, resets time to zero, and rescales to `U_bulk`. A
+  restart is `field_file` with `reset_time: false`.
+
+### Restarting
+
+```yaml
+initialization:
+  field_file: "results_re180_open/fields.npz"
+  reset_time: false
+statistics:
+  restart_state_file: "results_re180_open/turbulence_stats_state.npz"
+```
+
+The results folder is preserved, `timeseries.npz` is appended, and statistics
+continue from the accumulated running sums.
+
+---
+
+## Repository layout
+
+```
+torchannel/          the package
+  solver.py            ChannelFlow: time loop, restart, adaptive dt, forcing
+  operators.py         advection, diffusion, implicit z-diffusion, fused kernels
+  projection_fft.py    FFT + Thomas Poisson solver
+  turbstats.py         running-sum turbulence statistics
+  canopy.py            RKPM rigid-canopy IBM
+  utils.py             grids, divergence, field I/O
+  data/reference/      digitised reference DNS profiles
+examples/            runnable cases
+tests/               test_regression.py (pytest) + ~60 standalone diagnostics
+scripts/             converters and plotting utilities
+docs/                configuration, numerical methods, canopy
+```
+
+Top-level `solver.py`, `utils.py` etc. are back-compat shims that re-export the
+package modules.
+
+---
+
+## Citing
+
+See [`CITATION.cff`](CITATION.cff). If you use the canopy IBM, please also cite
+Monti, Nicholas, Omidyeganeh, Pinelli & Rosti (2022), *On the solidity parameter
+in canopy flows*, JFM.
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
----
-
-## Author
-
-Giorgio Cavallazzi
-
-For questions, issues, or contributions, please open an issue on the GitHub repository.
-
----
-
-## Acknowledgments
-
-This code implements standard DNS methods for turbulent channel flow based on the extensive literature in computational fluid dynamics. The implementation emphasizes:
-
-- **Performance**: GPU acceleration with PyTorch for efficient large-scale simulations
-- **Accuracy**: Second-order spatial discretization with adaptive timestepping
-- **Usability**: YAML configuration, restart capabilities, and comprehensive output
-
----
-
-## Citation
-
-If you use TorChannel in your research, please cite:
-
-```
-@software{torchannel2024,
-  author = {Cavallazzi, Giorgio},
-  title = {TorChannel: GPU-accelerated DNS for turbulent channel flow},
-  year = {2024},
-  url = {https://github.com/[your-username]/TorChannel}
-}
-```
+MIT — see [`LICENSE`](LICENSE).
