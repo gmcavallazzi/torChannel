@@ -264,6 +264,43 @@ def test_fused_imex_kernel_matches_separate_operators():
         assert err < 1e-12, f"fused and separate {name}-RHS disagree by {err:.3e}"
 
 
+def test_normal_stresses_are_not_filtered_by_interpolation():
+    """u'u' and v'v' must be formed at their own nodes, not at the cell centre.
+
+    Moving a staggered velocity to the cell centre costs a 2-point average, which
+    is a low-pass filter with transfer function cos(k*d/2). It therefore removes
+    variance in proportion to the grid spacing in that component's OWN staggered
+    direction -- dx for u, dy for v, dz for w. On a wall-resolved channel dz is
+    tiny and dx is not, so it damps u' while leaving w' untouched: exactly the
+    signature of wall-parallel under-resolution, which is what it gets mistaken
+    for.
+
+    Driven here at the x-Nyquist mode, where the filter is a total annihilator:
+    alternating +/-A on successive x-faces averages to zero at every cell centre.
+    The correct variance is A^2; the cell-centred estimate is 0.
+    """
+    from torchannel.turbstats import TurbulenceStats
+
+    nx = ny = 8
+    nz, Lz, A = 12, 1.0, 0.5
+    z_f, z_c, dz_f, dz_c = generate_grid(1.6, nz, Lz, stretching_type="bottom")
+    stats = TurbulenceStats(nx, ny, nz, 1.0, 1.0, Lz, z_c, z_f, dz_c, dz_f,
+                            1.0, 1.0, 1e-3, Re_tau_target=180.0, device="cpu",
+                            top_wall_bc_type="dirichlet")
+
+    u = torch.zeros(nx + 1, ny + 2, nz + 2)
+    v = torch.zeros(nx + 2, ny + 1, nz + 2)
+    w = torch.zeros(nx + 2, ny + 2, nz + 1)
+    sign = torch.tensor([(-1.0) ** i for i in range(nx + 1)]).view(-1, 1, 1)
+    u += A * sign                       # x-Nyquist; u[0] == u[nx] since nx is even
+    stats.accumulate_statistics(u, v, w, u_tau_current=1.0)
+
+    uu = stats.finalize_statistics()["uu_mean"]
+    assert np.allclose(uu, A ** 2, rtol=1e-10), (
+        f"u'u' at the x-Nyquist mode is {uu[nz // 2]:.6e}, expected {A ** 2:.6e}. "
+        "Zero means the cell-centre average is still being applied.")
+
+
 def test_reynolds_stress_includes_plane_mean_unsteadiness():
     """u'u' must be taken about the TIME mean, not the instantaneous plane mean.
 
