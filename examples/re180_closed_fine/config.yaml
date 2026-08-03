@@ -1,0 +1,99 @@
+# ==============================================================================
+# Re_tau = 180 CLOSED CHANNEL, REFINED IN x AND y -- resolution study
+# ==============================================================================
+# Identical to examples/re180_closed/ except nx, ny: 192 -> 240. Same box, same
+# nu, same wall-normal grid, same U_bulk. The point is to change ONE thing.
+#
+# WHY: at 192^2 the log-layer statistics show a specific, reproducible signature.
+# Band-averaged over 20 < z+ < 150 against MKM:
+#
+#     u'_rms+     -5.5%          <- deficient
+#     w'_rms+     -0.3%          <- right
+#     -<u'w'>+    +1.3%          <- right (the total-stress balance pins it)
+#     R_uw        +7.6%          <- the ratio absorbs the u'_rms deficit
+#
+# The errors compose: +1.3 - (-5.5) - (-0.3) = +7.1%, which recovers the R_uw
+# excess almost exactly. So the shear stress is correct and the fluctuations
+# carrying it are individually too weak -- the signature of under-resolution,
+# not of a modelling or momentum-budget error. (The momentum-budget error was
+# real and separate; it was fixed in 47fe834 and moved R_uw by nothing.)
+#
+# Supporting evidence: Vreman & Kuerten's second-order FD database at
+# dx+ = 4.4 reproduces their own spectral result to 0.3%, so second-order
+# differencing per se is not the problem -- the grid is.
+#
+# RESOLUTION: dx+ = 9.4, dy+ = 4.7 (was 11.8, 5.9); dz+ unchanged at 0.37/2.44.
+#
+# WHAT TO EXPECT: if the deficit is second-order in dx, (9.4/11.8)^2 = 0.63
+# recovers only ~40% of it -- u'_rms about -3.5%, R_uw about +5%. That is a
+# clear, measurable move but NOT closure. Two grids plus Vreman's dx+ = 4.4
+# give three points to test the scaling against, which is worth more than one
+# converged run.
+#
+# COST: 14.75M cells (1.56x). dt is set by the near-wall z term, not by dx, so
+# it barely moves (0.00413 -> 0.00392, measured on the 192^2 field): the cost is
+# essentially the cell count alone. ~5.5 h.
+# ------------------------------------------------------------------------------
+
+grid:
+  nx: 240                  # 2^4 * 3 * 5 -- FFT-friendly
+  ny: 240
+  nz: 256                  # UNCHANGED: the wall-normal grid is not under test
+
+domain:
+  Lx: 12.566370614359172   # 4*pi
+  Ly: 6.283185307179586    # 2*pi
+  Lz: 2.0                  # closed channel: delta = Lz/2 = 1
+  stretching_type: "symmetric"
+
+flow:
+  Re: 2792.8       # nu = 1/Re = 3.5807e-4; Re_b matched to MKM chan180
+  Re_tau: 180.0
+  U_bulk: 1.0
+  gamma: 1.6       # -> dz+ = 0.37 at each wall, identical to the 192^2 case
+
+boundary_conditions:
+  top_wall:
+    type: "dirichlet"
+
+initialization:
+  # Staggered-aware trilinear regrid of the converged 192^2 field onto 240^2.
+  # This is NOT a restart: time resets to 0 and the field is rescaled to U_bulk.
+  # That is the correct treatment -- the interpolant is not a solution of the
+  # discrete equations on the new grid, and the sub-grid scales the coarse run
+  # never carried have to be generated. The large scales survive the regrid,
+  # which is why 60 t.u. suffices where a cold start would need several hundred.
+  type: "interpolate"
+  field_file: "results_re180_closed/fields.npz"
+
+solver:
+  type: "fft"
+
+time:
+  dt: 0.004
+  n_steps: 2000000000
+  t_max: 437.0             # 60 t.u. transient + 377 t.u. of statistics
+  CFL_target: 0.4
+  dt_update_interval: 10
+  dt_max: 0.02
+  dt_min: 0.0001
+  scheme: "IMEX"
+
+compute:
+  device: "auto"
+
+output:
+  results_folder: results_re180_closed_fine
+  n_out: 500
+  # 5000, not 10000: the statistics checkpoint is only written alongside
+  # fields.npz, and this is what sets how often convergence can be re-logged.
+  # A 460 MB field write every ~15 min is a rounding error against the step cost.
+  n_save: 5000
+
+statistics:
+  n_stats: 200
+  t_stats: 60.0      # ~4 eddy turnovers (delta/u_tau = 15.5 t.u.) after the
+                     # regrid, enough for the small scales to fill in
+  output_file: "turbulence_stats.npz"
+  state_file: "turbulence_stats_state.npz"
+  spectra_z: [0.0833, 0.25, 1.0]
