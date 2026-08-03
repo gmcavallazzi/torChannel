@@ -57,7 +57,7 @@ initialization:
   # Navier-Stokes, so a cleanly mirrored field sits on an invariant manifold and
   # would stay symmetric indefinitely).
   type: "parabolic"                 # ignored: field_file makes this a restart
-  field_file: "results_re180_closed_run335/fields.npz"
+  field_file: "results_re180_cfl02_run338/fields.npz"
   reset_time: true
 
 solver:
@@ -66,7 +66,7 @@ solver:
 time:
   dt: 0.004
   n_steps: 2000000000
-  t_max: 379.0             # 2 t.u. restart settle + 377 t.u. (30 washouts) of stats
+  t_max: 382.0             # 5 t.u. restart settle + 377 t.u. (30 washouts) of stats
   CFL_target: 0.4          # raised from 0.28; AB2 advection is stable here but
                            # this leaves less margin -- watch max|div| and dt
   dt_update_interval: 10
@@ -96,7 +96,12 @@ statistics:
   # is only the restart settle -- the AB2 history buffer starts empty (first
   # step is Euler) and the bulk-velocity controller re-acquires. Measured: both
   # are done inside ~250 steps, so 2 t.u. is already generous.
-  t_stats: 2.0
+  # 5 t.u., not 2: the bulk forcing changed from an integral controller to the
+  # exact one-step constraint (661e268), so the body force jumps to its true
+  # value immediately instead of being steered there. That is a small, genuine
+  # change to the dynamics and deserves a few eddy-turnover fractions to settle
+  # before sampling. Still not a spin-up -- the field is fully developed.
+  t_stats: 5.0
   output_file: "turbulence_stats.npz"
   state_file: "turbulence_stats_state.npz"
 
