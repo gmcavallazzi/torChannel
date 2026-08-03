@@ -66,7 +66,7 @@ torchannel = ["data/reference/*.csv"]
 testpaths = ["tests"]
 # The historical suite is a set of standalone print-based scripts; only files
 # matching this pattern are collected as real assertions.
-python_files = ["test_regression*.py", "test_precision*.py"]
+python_files = ["test_regression*.py", "test_precision*.py", "test_control*.py"]
 markers = [
     "gpu: requires a CUDA device (deselect with -m 'not gpu')",
     "slow: takes more than ~30 s",

@@ -417,6 +417,11 @@ class ChannelFlow:
         # cuFFT pair plus a serial (256-launch) Thomas sweep that can't be portably
         # compiled (the loop unrolls); a CUDA graph instead captures those launches
         # once and replays them with ~one launch. Opt-in via TORCHANNEL_POISSON_CUDAGRAPH=1.
+        # Wall actuation (blowing/suction) for the control API. None = plain
+        # no-slip, which is the default and reproduces the uncontrolled flow
+        # exactly. See set_wall_velocity() and torchannel/control.py.
+        self._wall_velocity = None
+
         self._pgraph = None
         self._pg_cudagraph = (os.environ.get("TORCHANNEL_POISSON_CUDAGRAPH", "0") == "1"
                               and self.device.type == 'cuda'
@@ -661,6 +666,46 @@ class ChannelFlow:
     def apply_bc_uvw(self):
         """Apply boundary conditions to all velocity components (optimized fused kernel)"""
         apply_bc_all(self.u, self.v, self.w, self.top_wall_bc_type)
+        if self._wall_velocity is not None:
+            self._apply_wall_velocity()
+
+    def set_wall_velocity(self, w_wall):
+        """Impose a wall-normal velocity at the bottom wall (blowing/suction).
+
+        This is the actuation hook for flow control: opposition control,
+        reinforcement learning, adjoint-based control. Pass None to restore
+        plain no-slip.
+
+        Args:
+            w_wall: (nx, ny) tensor of wall-normal velocity at the bottom wall,
+                or None. w is staggered in z, so w[:, :, 0] IS the wall face --
+                this is a direct assignment, not a ghost-cell reflection.
+
+        The field is mean-subtracted before use. With periodic x/y and no flux
+        through the top, a non-zero net wall flux would violate global mass
+        conservation, and the all-Neumann pressure Poisson problem would have no
+        solution (its compatibility condition is exactly zero net flux). Silently
+        enforcing it is safer than letting the projection diverge.
+        """
+        if w_wall is None:
+            self._wall_velocity = None
+            return
+        w_wall = torch.as_tensor(w_wall, dtype=self.dtype, device=self.device)
+        if w_wall.shape != (self.nx, self.ny):
+            raise ValueError(
+                f"wall velocity must have shape {(self.nx, self.ny)}, got {tuple(w_wall.shape)}")
+        self._wall_velocity = w_wall - w_wall.mean()
+
+    def _apply_wall_velocity(self):
+        """Write the actuation into w's bottom face and refresh its x/y ghosts."""
+        w = self.w
+        w[1:self.nx + 1, 1:self.ny + 1, 0] = self._wall_velocity
+        # apply_bc_all set the periodic ghosts before this write, so redo them
+        # for the z=0 plane only.
+        w[0, :, 0] = w[-2, :, 0]
+        w[-1, :, 0] = w[1, :, 0]
+        w[:, 0, 0] = w[:, -2, 0]
+        w[:, -1, 0] = w[:, 1, 0]
 
     def _audit_dtypes(self):
         """Assert the tensors that matter carry the dtypes they are meant to.

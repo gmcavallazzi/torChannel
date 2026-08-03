@@ -12,6 +12,26 @@ a batch job.
 It also includes an RKPM immersed-boundary method for rigid filamentous canopies,
 following Monti et al. (2022).
 
+**Because the solver is a PyTorch program, it can be driven as a control
+environment** — stepped from a Python loop, with sensors read and actuation
+written in-process, no co-simulation layer:
+
+```python
+from torchannel.control import ChannelFlowEnv, OppositionControl
+
+env = ChannelFlowEnv("examples/re180_open/config.yaml", action_interval=0.05)
+obs = env.reset()                       # obs = wall shear stress field
+policy = OppositionControl(env, detection_z_plus=15.0)
+
+for _ in range(400):
+    obs, reward, done, info = env.step(policy(obs))   # action = wall blowing/suction
+    print(info["drag_reduction"])
+```
+
+See [`examples/opposition_control/`](examples/opposition_control/), which
+reproduces the ~20–25 % drag reduction of Choi, Moin & Kim (1994).
+`env.to_gym()` adapts it to `gymnasium` for RL libraries.
+
 ---
 
 ## Install
@@ -75,10 +95,14 @@ Being explicit, so you can tell in one minute whether it fits your problem.
 | Forcing | Constant flow rate, via a feedback controller on the bulk velocity |
 | Initialisation | `parabolic`, `uniform`, `vortices` (+ seeded random perturbations), restart from a checkpoint, or `interpolate` from a field on a *different* grid |
 | Immersed boundary | Rigid filamentous canopies (RKPM direct forcing) — see [`docs/CANOPY.md`](docs/CANOPY.md) |
+| Control | Steppable environment with wall blowing/suction; optional `gymnasium` adapter — see [`torchannel/control.py`](torchannel/control.py) |
+| Precision | `compute.precision: float64` (default, the reference path), `mixed`, or `float32` |
 | Statistics | Mean profile, Reynolds stresses ⟨u'u'⟩ ⟨v'v'⟩ ⟨w'w'⟩ ⟨u'w'⟩, third moments, canopy drag profile, 2D premultiplied spectra at arbitrary heights. Accumulated as running sums, so restarts lose nothing |
 
-**Not supported.** No scalar transport, temperature or buoyancy. No LES or wall
-model — this is DNS, and the resolution burden is yours. No inflow/outflow or
+**Not supported.** Backpropagation *through* the solver (in-place ops, CUDA-graph
+capture and preallocated buffers all fight autograd — the control environment is
+for gradient-free methods). No scalar transport, temperature or buoyancy. No LES
+or wall model — this is DNS, and the resolution burden is yours. No inflow/outflow or
 streamwise development. No constant-pressure-gradient forcing (flow rate only).
 No flexible or moving immersed bodies. `RK3` is a stub that raises
 `NotImplementedError`. **Single GPU only** — there is no MPI or domain
@@ -123,10 +147,15 @@ pressure BCs, and the reference-data axis convention. CI runs it on every push.
 Measured on an NVIDIA GB10, `float64` throughout: **0.96 s/step at 576×432×260
 (64.7 M cells)** with the canopy IBM active — about 1.5×10⁻⁸ s per cell per step.
 
-Everything is `torch.float64`. That is deliberate for a DNS, but note that fp64
-runs at 1/64 of fp32 on consumer NVIDIA hardware, so a datacenter-class card is
-currently the practical requirement. Configurable mixed/single precision is in
-progress.
+`compute.precision` selects the working precision. `float64` is the default and
+the reference path; `mixed` keeps the pressure solve in float64 (its z-operator
+is ill-conditioned at the largest scales) while running the fields and momentum
+kernels in float32; `float32` runs everything reduced. Statistics accumulators,
+grid metrics and the bulk-velocity controller stay float64 in every mode.
+
+Reduced precision halves memory, so roughly 1.26× the linear resolution fits on
+the same card. Expect a ~2× speedup, not 64× — these kernels are
+memory-bandwidth bound, so halving the bytes is what you actually collect.
 
 ### GPU notes (GB10 / sm_121)
 
