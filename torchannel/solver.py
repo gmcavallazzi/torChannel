@@ -390,6 +390,24 @@ class ChannelFlow:
 
         self.solver_type = config.get('solver', {}).get('type', 'fft')
 
+        # Incremental pressure correction (default) vs Chorin's non-incremental
+        # projection. Incremental carries grad(p^n) in the momentum step and
+        # solves for the correction p', giving second-order time accuracy and
+        # confining the artificial homogeneous-Neumann wall condition to the
+        # increment rather than imposing it on the whole pressure. This matches
+        # CaNS. Set solver.incremental_pressure: false to recover the old
+        # first-order behaviour, which is only useful for reproducing pre-existing
+        # results. IMEX only -- the FE path is a first-order testing scheme where
+        # the distinction buys nothing.
+        self.incremental_pressure = bool(
+            config.get('solver', {}).get('incremental_pressure', True))
+
+        # Hold the bulk-velocity body force fixed (constant pressure gradient).
+        # Not a config option -- it exists so the temporal-order test can remove
+        # the PI controller, whose 0.1/dt gain makes its own response
+        # dt-dependent and would otherwise swamp the scheme's convergence rate.
+        self.freeze_forcing = False
+
         if self.solver_type == 'direct':
             self.poisson_matrix = build_poisson_matrix(self.nx, self.ny, self.nz,
                                                          self.dx, self.dy, self.dz_c, self.dz_f,
@@ -946,21 +964,12 @@ class ChannelFlow:
             rhs_v_explicit = diff_xy_v - adv_v
             rhs_w_explicit = diff_xy_w - adv_w
 
-        # Add bulk forcing (pressure gradient) to RHS (after if-else)
-        # This matches .susa where add_mom_forcing is called before time integration
-        rhs_u_explicit += self.forcing
-
-        # MOMENTUM-BALANCE INSTRUMENTATION.
-        # self.forcing enters the RHS *before* the AB2 combination, so the force
-        # actually applied this step is 1.5*f_n - 0.5*f_{n-1}, NOT the f_n that
-        # gets logged. For a stationary series the means agree, but reported and
-        # applied are different objects, so record the applied one explicitly.
-        _f_now = self.forcing
-        if self._f_prev_used is None:
-            self._f_applied = _f_now                       # first step: plain Euler
-        else:
-            self._f_applied = 1.5 * _f_now - 0.5 * self._f_prev_used
-        self._f_prev_used = _f_now
+        # NOTE: the bulk forcing is NOT added here. It is applied as an exact
+        # uniform shift just before the projection (see below), the way CaNS
+        # does. Adding it to this RHS would put it through the AB2 combination,
+        # i.e. apply 1.5*f_n - 0.5*f_{n-1} -- extrapolating a quantity whose
+        # entire purpose is to make the CURRENT step land on the target bulk
+        # velocity.
 
         # Store in current buffer (reuse allocation) - MOVED OUTSIDE if-else
         if self.rhs_u_curr is None:
@@ -986,14 +995,37 @@ class ChannelFlow:
         self.rhs_u_prev, self.rhs_u_curr = self.rhs_u_curr, self.rhs_u_prev
         self.rhs_v_prev, self.rhs_v_curr = self.rhs_v_curr, self.rhs_v_prev
         self.rhs_w_prev, self.rhs_w_curr = self.rhs_w_curr, self.rhs_w_prev
+
+        # Pass dt as a 0-D tensor: torch.compile guards on Python-float values and
+        # would recompile every time the adaptive dt changes; tensor values are
+        # not guarded, so a varying dt reuses the compiled kernels. Defined here
+        # rather than below because the pressure-gradient step also needs it.
+        dt_t = torch.as_tensor(dt, device=self.device, dtype=torch.float64)
+
+        # ---- INCREMENTAL PRESSURE CORRECTION: carry grad(p^n) here ----------
+        # Without this the scheme is Chorin's NON-incremental projection, which
+        # is only FIRST order in time and imposes homogeneous Neumann on the
+        # FULL pressure at the walls, where the true condition is
+        # dp/dz = nu d2w/dz2 != 0. Adding grad(p^n) to the momentum step and
+        # solving the Poisson equation for the CORRECTION instead of the whole
+        # pressure makes it second order and confines that boundary error to the
+        # increment. This is what CaNS does (rk.f90:184-186 adds
+        # -grad p to the velocity, updatep.f90 accumulates p = p + pp).
+        #
+        # Applied with the full dt and OUTSIDE the AB2 combination -- CaNS uses
+        # factor12 (the whole substep) for the same reason. Extrapolating a
+        # pressure gradient that is about to be corrected is meaningless.
+        # It goes in BEFORE the implicit z-solve so it appears on the RHS of
+        # (I - theta*dt*nu*d2/dz2)u* = ..., which is the consistent placement.
+        if self.incremental_pressure:
+            project_velocity(self.u, self.v, self.w, self.p,
+                             self.nx, self.ny, self.nz,
+                             self.dx, self.dy, self.dz_c_c, self.dz_f_c, dt_t)
+
         # Solve (I - dt*nu*d²/dz²)u^(n+1) = u^*
         # where u^* is the velocity after explicit update
         self.apply_bc_uvw()  # Fused boundary conditions
 
-        # Pass dt as a 0-D tensor: torch.compile guards on Python-float values and
-        # would recompile every time the adaptive dt changes; tensor values are
-        # not guarded, so a varying dt reuses the compiled kernels.
-        dt_t = torch.as_tensor(dt, device=self.device, dtype=torch.float64)
         self.u = solve_implicit_diffusion_u(self.u, dt_t, self.nx, self.ny, self.nz,
                                             self.dz_c_c, self.dz_f_c, self.nu, top_wall_bc_type=self.top_wall_bc_type)
         self.v = solve_implicit_diffusion_v(self.v, dt_t, self.nx, self.ny, self.nz,
@@ -1015,6 +1047,32 @@ class ChannelFlow:
                                      dtype=torch.float64)
             self.canopy_drag = self.canopy.apply_forcing(self.u, self.v, self.w, dt_t, gain_t)
 
+        # ---- CONSTANT MASS FLUX, ENFORCED EXACTLY (CaNS convention) --------
+        # A uniform shift of u puts the bulk velocity exactly on target in one
+        # step. Being spatially constant its divergence is zero, so it commutes
+        # with the projection -- the volume average of dp/dx over a periodic
+        # direction telescopes to zero, so the projection cannot move u_bulk.
+        # Applying it here therefore leaves the FINAL field exactly on target,
+        # and it is where CaNS applies it (main.f90:465, between rk and fillps).
+        #
+        # This replaces an integral controller of gain 0.1/dt. With no
+        # proportional term that controller was an undamped oscillator,
+        # d2(du_b)/dt2 = -(0.1/dt^2) du_b, period ~20 steps; it held the bulk
+        # velocity only to ~1.5% rms in the forcing, and because its gain went as
+        # 1/dt its closed-loop response was itself dt-dependent, which denies the
+        # scheme any clean temporal order of accuracy. The force is now DIAGNOSED
+        # from the exact correction rather than controlled towards it.
+        if not self.freeze_forcing:
+            u_bulk_star = compute_bulk_velocity(self.u, self.cell_vol_ratio,
+                                                self.total_volume)
+            correction = self.U_bulk - u_bulk_star
+            self.u[1:self.nx + 1, 1:self.ny + 1, 1:self.nz + 1] += correction
+            self.forcing = correction / dt
+        # Applied and reported forces are now the same object: no AB2
+        # extrapolation stands between them.
+        self._f_applied = self.forcing
+        self._f_prev_used = self.forcing
+
         # Update ghost cells for intermediate velocity before divergence computation
         self.apply_bc_uvw()  # Fused boundary conditions
 
@@ -1023,34 +1081,40 @@ class ChannelFlow:
         div = compute_divergence(self.u, self.v, self.w, self.nx, self.ny, self.nz,
                                  self.dx, self.dy, self.dz_f_c)
 
-        # Step 2: Solve Poisson equation for pressure: ∇²p = div/dt
-        self.p = self._solve_pressure(div / dt)
+        # Step 2: Solve the Poisson equation. Incremental: the unknown is the
+        # pressure CORRECTION p', not the whole pressure. Non-incremental
+        # (legacy): it is the whole pressure and p^n never entered the momentum
+        # step, so nothing is accumulated.
+        p_corr = self._solve_pressure(div / dt)
 
         # Diagnostic: check pressure solution (only every 100 steps to minimize GPU-CPU sync overhead)
         if self.current_step % 100 == 0:
-            if torch.any(torch.isnan(self.p)) or torch.any(torch.isinf(self.p)):
+            if torch.any(torch.isnan(p_corr)) or torch.any(torch.isinf(p_corr)):
                 print(f"WARNING: Pressure has NaN or Inf values at step {self.current_step}!", flush=True)
 
-        # Step 3: Project velocity to divergence-free field: u = u* - dt*∇p
+        # Step 3: Project velocity to divergence-free field: u = u* - dt*∇p'
         # (dt_t is a 0-D tensor — see the implicit-diffusion call above — so the
         # compiled projection does not recompile when the adaptive dt changes.)
-        self.u, self.v, self.w = project_velocity(self.u, self.v, self.w, self.p,
+        self.u, self.v, self.w = project_velocity(self.u, self.v, self.w, p_corr,
                                                    self.nx, self.ny, self.nz,
                                                    self.dx, self.dy, self.dz_c_c, self.dz_f_c, dt_t)
+
+        # Step 4: accumulate the pressure, p^{n+1} = p^n + p'. The correction
+        # carries valid ghosts from the Poisson solve (periodic x/y, Neumann z)
+        # and the boundary condition is linear, so the sum has valid ghosts too.
+        # p' has zero mean because the singular (0,0) mode is pinned, so the
+        # accumulated pressure cannot drift.
+        if self.incremental_pressure:
+            self.p = self.p + p_corr
+        else:
+            self.p = p_corr
 
         # Reapply boundary conditions after projection
         self.apply_bc_uvw()  # Fused boundary conditions
 
-        # Update Bulk Forcing (Lagged, matches .susa)
-        # Calculate u_bulk using the NEW velocity (at end of step)
+        # Report the achieved bulk velocity: it should equal U_bulk to round-off,
+        # since the shift above set it exactly and the projection cannot move it.
         u_bulk_current = compute_bulk_velocity(self.u, self.cell_vol_ratio, self.total_volume)
-        
-        # Update forcing for NEXT step (PI Controller)
-        # .susa uses damp=10.0 with Crank-Nicholson. We use a relaxation factor.
-        # forcing += (target - current) / timescale
-        # We want to correct the error over ~10 time steps to be stable.
-        relaxation = 0.1
-        self.forcing += (self.U_bulk - u_bulk_current) / dt * relaxation
 
         return u_bulk_current, self.forcing
 

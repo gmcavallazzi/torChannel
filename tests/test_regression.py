@@ -264,6 +264,113 @@ def test_fused_imex_kernel_matches_separate_operators():
         assert err < 1e-12, f"fused and separate {name}-RHS disagree by {err:.3e}"
 
 
+def _tiny_solver(tmp_path, **solver_overrides):
+    """A small IMEX channel, built through the real config path."""
+    import yaml
+    from torchannel.solver import ChannelFlow
+
+    cfg = {
+        'grid': {'nx': 8, 'ny': 8, 'nz': 16},
+        'domain': {'Lx': 2 * np.pi, 'Ly': np.pi, 'Lz': 2.0,
+                   'stretching_type': 'symmetric'},
+        'flow': {'Re': 2792.8, 'Re_tau': 180.0, 'U_bulk': 1.0, 'gamma': 1.6},
+        'boundary_conditions': {'top_wall': {'type': 'dirichlet'}},
+        'initialization': {'type': 'vortices', 'seed': 5},
+        'solver': dict({'type': 'fft'}, **solver_overrides),
+        'time': {'dt': 2e-3, 'n_steps': 10, 't_max': 1e9, 'CFL_target': 0.2,
+                 'dt_update_interval': 100000, 'dt_max': 0.02, 'dt_min': 1e-6,
+                 'scheme': 'IMEX'},
+        'compute': {'device': 'cpu'},
+        'output': {'results_folder': str(tmp_path), 'n_out': 100000, 'n_save': 100000},
+        'statistics': {'n_stats': 0},
+    }
+    path = tmp_path / 'c.yaml'
+    path.write_text(yaml.safe_dump(cfg))
+    sim = ChannelFlow(str(path))
+
+    # The 'vortices' initial condition is 1-D laminar (v = w = 0, u = u(z)), so
+    # its divergence is identically zero and STAYS zero: the projection never
+    # engages and every pressure scheme looks the same. Superimpose a genuinely
+    # 3-D perturbation and project it once, so the run actually exercises the
+    # pressure path.
+    from torchannel.solver import apply_bc_all
+    from torchannel.projection import project_velocity as _proj
+
+    g = torch.Generator().manual_seed(11)
+    sim.u += 0.10 * torch.randn(sim.u.shape, generator=g, dtype=sim.u.dtype)
+    sim.v += 0.10 * torch.randn(sim.v.shape, generator=g, dtype=sim.v.dtype)
+    sim.w += 0.10 * torch.randn(sim.w.shape, generator=g, dtype=sim.w.dtype)
+    apply_bc_all(sim.u, sim.v, sim.w, sim.top_wall_bc_type)
+    div = compute_divergence(sim.u, sim.v, sim.w, sim.nx, sim.ny, sim.nz,
+                             sim.dx, sim.dy, sim.dz_f)
+    pp = sim._solve_pressure(div / 1.0)
+    _proj(sim.u, sim.v, sim.w, pp, sim.nx, sim.ny, sim.nz,
+          sim.dx, sim.dy, sim.dz_c, sim.dz_f, 1.0)
+    apply_bc_all(sim.u, sim.v, sim.w, sim.top_wall_bc_type)
+    sim.p = torch.zeros_like(sim.p)
+    return sim
+
+
+@pytest.mark.parametrize("incremental", [True, False])
+def test_projection_leaves_the_field_divergence_free(tmp_path, incremental):
+    """Whatever the pressure treatment, the projection contract is unchanged.
+
+    The incremental scheme carries grad(p^n) into the momentum step; that must
+    not degrade the divergence, which is the property everything else relies on.
+    """
+    sim = _tiny_solver(tmp_path, incremental_pressure=incremental)
+    for _ in range(5):
+        sim.step_imex(2e-3)
+        sim.current_step += 1
+    div = compute_divergence(sim.u, sim.v, sim.w, sim.nx, sim.ny, sim.nz,
+                             sim.dx, sim.dy, sim.dz_f)
+    assert float(div.abs().max()) < 1e-12, \
+        f"projection broken with incremental_pressure={incremental}"
+
+
+def test_incremental_and_non_incremental_pressure_agree(tmp_path):
+    """The two pressure formulations give the same VELOCITY, by construction.
+
+    This is not the textbook situation. Chorin's non-incremental projection is
+    famously first order while the incremental form is second, but that analysis
+    is continuous. Here the Poisson operator is built so that L = D.G EXACTLY,
+    and then the algebra collapses:
+
+        non-incremental:  L p  = div(u*)/dt
+        incremental:      L p' = div(u* - dt.G p^n)/dt = div(u*)/dt - L p^n
+                          =>  p' + p^n = p   =>  identical u^{n+1}
+
+    So switching to the incremental form cannot change the statistics, and the
+    dt-halving experiment that showed no change in the u' deficit was consistent
+    with that all along. What it DOES change is the meaning of self.p: it becomes
+    the accumulated physical pressure rather than a one-step projection
+    potential, which is what CaNS carries and what any pressure-based diagnostic
+    needs.
+
+    The residual difference is the non-commutation of the implicit z-diffusion
+    with the projection -- O(nu*dt) -- so the two must agree closely but not
+    exactly. Both bounds matter: too large means the algebra above is broken,
+    exactly zero means the switch is not wired up.
+    """
+    us = {}
+    for incremental in (True, False):
+        sim = _tiny_solver(tmp_path, incremental_pressure=incremental)
+        sim.freeze_forcing = True
+        for _ in range(8):
+            sim.step_imex(2e-3)
+            sim.current_step += 1
+        us[incremental] = sim.u.clone()
+        if incremental:
+            assert float(sim.p.abs().max()) > 0, "incremental run accumulated no pressure"
+
+    scale = float(us[True].abs().max())
+    diff = float((us[True] - us[False]).abs().max()) / scale
+    assert diff < 1e-4, \
+        f"the two pressure formulations should agree to O(nu*dt); got {diff:.2e}"
+    assert diff > 0.0, \
+        "bit-identical: incremental_pressure is not actually switching anything"
+
+
 def test_normal_stresses_are_not_filtered_by_interpolation():
     """u'u' and v'v' must be formed at their own nodes, not at the cell centre.
 

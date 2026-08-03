@@ -50,7 +50,7 @@ The local GPU (NVIDIA GB10) cannot NVRTC-compile the legacy TorchScript fuser, s
 **Entry point**: `torchannel-run` (or `main.py`) → creates `ChannelFlow` (from `torchannel/solver.py`) and calls `run_simulation()`.
 
 **Core modules**:
-- `solver.py` — `ChannelFlow`: time-stepping loop, restart logic, adaptive dt (CFL), bulk-velocity PI forcing, fused BC kernel. Valid `time.scheme` values: `"IMEX"` (production; AB2 advection + xy-diffusion, Crank–Nicolson implicit z-diffusion), `"FE"` (fully explicit Forward Euler with instantaneous bulk-velocity correction — testing/small cases only), `"RK3"` (NotImplementedError placeholder). There is no standalone "AB2" scheme.
+- `solver.py` — `ChannelFlow`: time-stepping loop, restart logic, adaptive dt (CFL), exact bulk-velocity forcing, fused BC kernel. Valid `time.scheme` values: `"IMEX"` (production; AB2 advection + xy-diffusion, Crank–Nicolson implicit z-diffusion), `"FE"` (fully explicit Forward Euler with instantaneous bulk-velocity correction — testing/small cases only), `"RK3"` (NotImplementedError placeholder). There is no standalone "AB2" scheme.
 - `operators.py` — staggered-grid advection/diffusion, implicit z-diffusion tridiagonal solves, fused kernels (`compute_momentum_rhs_fused_imex` is the one used by IMEX), fused CFL
 - `tridiag.py` — batched parallel-cyclic-reduction tridiagonal solver (used by the implicit diffusion)
 - `projection_fft.py` — FFT (x,y) + Thomas (z) Poisson solver; modified wavenumbers; Neumann pressure BCs at both walls; singular (0,0) mode pinned
