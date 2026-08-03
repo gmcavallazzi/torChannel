@@ -358,6 +358,19 @@ class ChannelFlow:
             print(f"  Output file: {self.stats_output_path}", flush=True)
             print(f"  State checkpoint file: {self.stats_state_path}", flush=True)
 
+            # Outer length scale, same convention as the run_simulation header:
+            #   canopy       -> delta = Lz - h   (Monti et al. 2022)
+            #   open channel -> delta = Lz       (neumann top: one wall)
+            #   closed       -> delta = Lz/2
+            # The canopy block is configured below, so read h from the config here.
+            _canopy_cfg = config.get('canopy', {})
+            if _canopy_cfg.get('enabled', False):
+                stats_delta = self.Lz - float(_canopy_cfg.get('h', 0.25))
+            elif self.top_wall_bc_type == 'neumann':
+                stats_delta = self.Lz
+            else:
+                stats_delta = self.Lz / 2.0
+
             self.turbulence_stats = TurbulenceStats(
                 self.nx, self.ny, self.nz,
                 self.Lx, self.Ly, self.Lz,
@@ -365,7 +378,9 @@ class ChannelFlow:
                 self.dx, self.dy, self.nu,
                 self.Re_tau, z_plus_target=z_plus_target,
                 device=self.device,
-                spectra_z=stats_config.get('spectra_z', None)
+                spectra_z=stats_config.get('spectra_z', None),
+                top_wall_bc_type=self.top_wall_bc_type,
+                delta=stats_delta
             )
 
             # Load statistics state if restarting

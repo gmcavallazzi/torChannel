@@ -19,7 +19,7 @@ class TurbulenceStats:
 
     def __init__(self, nx, ny, nz, Lx, Ly, Lz, z_c, z_f, dz_c, dz_f,
                  dx, dy, nu, Re_tau_target, z_plus_target=15.0, device='cpu',
-                 spectra_z=None):
+                 spectra_z=None, top_wall_bc_type='dirichlet', delta=None):
         """
         Initialize statistics accumulator.
 
@@ -37,6 +37,14 @@ class TurbulenceStats:
             spectra_z: optional list of PHYSICAL heights for the 2D-spectra
                 planes (e.g. [0.125, 0.25, 0.75] for a canopy run); each plane
                 gets its own spectra, no wall-mirroring
+            top_wall_bc_type: 'dirichlet' (closed channel, two no-slip walls) or
+                'neumann' (open channel: free-slip/symmetry top, ONE wall).
+                Controls whether u_tau averages both walls -- on an open channel
+                the "top wall" value is the free-surface velocity, and averaging
+                it in inflates u_tau by a large factor.
+            delta: outer length scale for Re_tau and z+. Defaults to Lz/2 for a
+                closed channel and Lz for an open one. Canopy runs should pass
+                Lz - h explicitly (Monti et al. 2022 convention).
         """
         self.nx = nx
         self.ny = ny
@@ -53,8 +61,14 @@ class TurbulenceStats:
         self.nu = nu
         self.device = device
 
-        # Compute target u_tau and find z+ grid indices
-        delta = Lz / 2.0  # Half-channel height
+        # Compute target u_tau and find z+ grid indices.
+        # delta is BC-dependent: Lz/2 for a closed channel (two walls), Lz for an
+        # open channel (one wall + free-slip top). Previously hard-coded to Lz/2,
+        # which put every z+ on an open channel out by a factor of two.
+        self.top_wall_bc_type = top_wall_bc_type
+        if delta is None:
+            delta = Lz if top_wall_bc_type == 'neumann' else Lz / 2.0
+        self.delta = delta
         self.u_tau_target = Re_tau_target * nu / delta
 
         # Find grid indices closest to z_plus_target from each wall
@@ -324,13 +338,23 @@ class TurbulenceStats:
         # At the wall: tau_wall = nu * dU/dz|_wall = u_tau^2
         # Simple approach: use first interior point distance from wall
 
-        # Distance from wall to first interior cell center
-        dz_utau = float(self.z_c[1])  # z_c[1] is first interior point (z_c[0] is ghost)
+        # Distance from each wall to its first interior cell center. These are
+        # only equal on a symmetric grid -- with 'bottom' or 'double' stretching
+        # they differ by orders of magnitude, so each wall uses its own spacing.
+        # (z_c[0] is the ghost cell, so z_c[1] is the first interior centre.)
+        dz_bot = float(self.z_c[1])
+        dUdz_bot = float(U_mean_gpu[0]) / dz_bot
 
-        # Velocity gradient: average of first points from both walls divided by distance
-        # U_mean_gpu[0]: first interior point from bottom wall
-        # U_mean_gpu[-1]: first interior point from top wall
-        dUdz_wall = float(0.5 * (U_mean_gpu[0] + U_mean_gpu[-1]) / dz_utau)
+        if self.top_wall_bc_type == 'neumann':
+            # Open channel: there is no top wall. U_mean[-1] is the free-surface
+            # velocity, and averaging it in as if it were a near-wall value
+            # inflates u_tau enormously (a factor ~7 on the Re_tau=180 case).
+            dUdz_wall = dUdz_bot
+        else:
+            # Closed channel: average the two no-slip walls.
+            dz_top = float(self.Lz - self.z_c[-2])
+            dUdz_top = float(U_mean_gpu[-1]) / dz_top
+            dUdz_wall = 0.5 * (dUdz_bot + dUdz_top)
 
         # Compute u_tau from wall shear stress: tau_wall = nu * dU/dz|_wall = u_tau^2
         u_tau_computed = float(np.sqrt(self.nu * dUdz_wall))
@@ -368,7 +392,8 @@ class TurbulenceStats:
             'E_vv_2d': E_vv_2d,
             'E_ww_2d': E_ww_2d,
             'E_uw_2d': E_uw_2d,
-            'Re_tau_target': self.u_tau_target * (self.Lz / 2) / self.nu,
+            # delta, not a hard-coded Lz/2 (wrong for open-channel and canopy runs)
+            'Re_tau_target': self.u_tau_target * self.delta / self.nu,
             'nu': self.nu,  # Kinematic viscosity
             'Re': 1.0 / self.nu,  # Reynolds number
             'u_tau': u_tau_computed  # Friction velocity from Reynolds stress

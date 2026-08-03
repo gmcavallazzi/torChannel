@@ -61,30 +61,45 @@ def compute_wall_coordinates(z_c, u_tau, nu):
     return z_plus
 
 
-def compute_dUdz(U_mean, z_c, Lz):
+def compute_dUdz(U_mean, z_c, Lz, open_channel=False):
     """
     Compute dU/dz from mean velocity profile using correct grid spacing.
-    
-    Augments the grid with points at z=0 and z=Lz where U=0 (no-slip)
-    to improve accuracy, especially at the wall.
+
+    Augments the grid with a point at z=0 where U=0 (no-slip) to improve
+    accuracy at the wall, and -- for a CLOSED channel only -- a second one at
+    z=Lz.
 
     Args:
         U_mean: Mean velocity profile at cell centers (nz,)
         z_c: Cell center positions (nz,)
         Lz: Domain height
+        open_channel: True for a free-slip/symmetry top (delta = Lz). Then U(Lz)
+            is the free-surface velocity, NOT zero, so the top is extrapolated
+            from the profile instead of being pinned to zero. Pinning it to zero
+            manufactures a huge spurious "wall" gradient at the free surface.
 
     Returns:
         dUdz: Velocity gradient at cell centers (nz,)
         dUdz_wall_bot: Velocity gradient at bottom wall (z=0)
-        dUdz_wall_top: Velocity gradient at top wall (z=Lz)
+        dUdz_wall_top: Velocity gradient at z=Lz (meaningless if open_channel)
     """
     nz = len(U_mean)
-    
+
     # Augment arrays with wall points
     # z_aug = [0, z_c..., Lz]
-    # U_aug = [0, U_mean..., 0]
+    # U_aug = [0, U_mean..., U(Lz)]
+    if open_channel:
+        # Linear extrapolation of U to the free surface from the last two cells.
+        if len(z_c) >= 2 and z_c[-1] != z_c[-2]:
+            slope = (U_mean[-1] - U_mean[-2]) / (z_c[-1] - z_c[-2])
+            U_top = U_mean[-1] + slope * (Lz - z_c[-1])
+        else:
+            U_top = U_mean[-1]
+    else:
+        U_top = 0.0
+
     z_aug = np.concatenate(([0.0], z_c, [Lz]))
-    U_aug = np.concatenate(([0.0], U_mean, [0.0]))
+    U_aug = np.concatenate(([0.0], U_mean, [U_top]))
     
     n_aug = len(U_aug)
     dUdz_aug = np.zeros(n_aug)
@@ -185,7 +200,70 @@ def reconstruct_grid_from_config(config_file, nx, ny, nz):
     return z_c, kx, ky
 
 
-def plot_mean_velocity(z_c, U_mean, u_tau, nu, ax_outer, ax_inner):
+#: Reference datasets bundled with the package (see scripts/fetch_reference_data.py).
+REFERENCE_DATASETS = {
+    'mkm180': 'Moser et al. (1999), $Re_\\tau=178$',
+    'mkm590': 'Moser et al. (1999), $Re_\\tau=587$',
+    'lm550': 'Lee \\& Moser (2015), $Re_\\tau=543$',
+}
+
+
+def load_reference(name):
+    """Load a bundled reference DNS profile, or a user-supplied CSV path.
+
+    Returns a dict of numpy arrays keyed z_delta, z_plus, U_plus, uu_plus,
+    vv_plus, ww_plus, uw_plus -- already remapped to torChannel's axes (z is
+    wall-normal, w is the wall-normal velocity), plus a 'label' for the legend.
+
+    These are CLOSED-channel profiles. Overlaid on an open channel they should
+    agree in the near-wall region; a difference toward the centreline is
+    physical, not an error -- a symmetry/free-slip top suppresses the
+    large-scale motions that cross a closed channel's centreline.
+    """
+    if name in REFERENCE_DATASETS:
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            'torchannel', 'data', 'reference', f'{name}.csv')
+        label = REFERENCE_DATASETS[name]
+        if not os.path.exists(path):
+            # Installed rather than in a clone: fall back to package data.
+            try:
+                import torchannel
+                path = os.path.join(os.path.dirname(torchannel.__file__),
+                                    'data', 'reference', f'{name}.csv')
+            except ImportError:
+                pass
+    else:
+        path = name
+        label = os.path.splitext(os.path.basename(path))[0]
+
+    if not os.path.exists(path):
+        raise SystemExit(
+            f"Reference data not found: {path}\n"
+            f"Available bundled datasets: {', '.join(sorted(REFERENCE_DATASETS))}\n"
+            f"Regenerate them with: python scripts/fetch_reference_data.py")
+
+    # Parsed explicitly rather than with genfromtxt(names=True): the '#' header
+    # block contains commas, which makes genfromtxt mis-detect the column names.
+    header, rows = None, []
+    with open(path) as fh:
+        for line in fh:
+            line = line.strip()
+            if not line or line.startswith('#'):
+                continue
+            if header is None:
+                header = [c.strip() for c in line.split(',')]
+                continue
+            rows.append([float(v) for v in line.split(',')])
+    if header is None or not rows:
+        raise SystemExit(f"Reference file has no data: {path}")
+
+    data = np.asarray(rows, dtype=float)
+    ref = {name: data[:, i] for i, name in enumerate(header)}
+    ref['label'] = label
+    return ref
+
+
+def plot_mean_velocity(z_c, U_mean, u_tau, nu, ax_outer, ax_inner, ref=None):
     """Plot mean velocity profile in outer and inner coordinates."""
     # Outer coordinates: U vs z
     ax_outer.plot(U_mean, z_c, 'k-', linewidth=1.5)
@@ -197,28 +275,53 @@ def plot_mean_velocity(z_c, U_mean, u_tau, nu, ax_outer, ax_inner):
     z_plus = compute_wall_coordinates(z_c, u_tau, nu)
     U_plus = U_mean / u_tau
 
-    ax_inner.semilogx(z_plus, U_plus, 'k-', linewidth=1.5)
+    # Asymptotes: viscous sublayer U+ = z+ and the log law with the standard
+    # kappa = 0.41, B = 5.2. Drawn first so the data sits on top.
+    zp_line = np.logspace(np.log10(0.5), np.log10(max(z_plus.max(), 1.0)), 100)
+    ax_inner.semilogx(zp_line, zp_line, ':', color='0.55', linewidth=1.0,
+                      label=r'$U^+=z^+$')
+    ax_inner.semilogx(zp_line, np.log(zp_line) / 0.41 + 5.2, '--', color='0.55',
+                      linewidth=1.0, label=r'$\frac{1}{0.41}\ln z^+ + 5.2$')
+
+    if ref is not None:
+        ax_inner.semilogx(ref['z_plus'], ref['U_plus'], 'o', color='tab:red',
+                          markersize=3, markerfacecolor='none', markevery=2,
+                          linewidth=0, label=ref['label'])
+
+    ax_inner.semilogx(z_plus, U_plus, 'k-', linewidth=1.5, label='torChannel')
     ax_inner.set_xlabel(r'$z^+$')
     ax_inner.set_ylabel(r'$U^+$')
     ax_inner.set_xlim([0.5, z_plus.max()])
+    ax_inner.set_ylim([0, max(U_plus.max(), 1.0) * 1.15])
     ax_inner.grid(True, alpha=0.3, which='both')
+    ax_inner.legend(fontsize=7, loc='upper left')
 
 
-def plot_reynolds_stresses_normal(z_c, uu, vv, ww, u_tau, nu, ax):
+def plot_reynolds_stresses_normal(z_c, uu, vv, ww, u_tau, nu, ax, ref=None):
     """Plot normal Reynolds stresses (uu, vv, ww) vs z+."""
     z_plus = compute_wall_coordinates(z_c, u_tau, nu)
 
     ax.plot(z_plus, uu / u_tau**2, 'r-', linewidth=1.5, label=r"$\langle u'u' \rangle^+$")
     ax.plot(z_plus, vv / u_tau**2, 'g-', linewidth=1.5, label=r"$\langle v'v' \rangle^+$")
     ax.plot(z_plus, ww / u_tau**2, 'b-', linewidth=1.5, label=r"$\langle w'w' \rangle^+$")
+
+    if ref is not None:
+        # Same colour per component, open symbols, so the pairing is obvious.
+        for key, colour in (('uu_plus', 'r'), ('vv_plus', 'g'), ('ww_plus', 'b')):
+            ax.plot(ref['z_plus'], ref[key], 'o', color=colour, markersize=3,
+                    markerfacecolor='none', markevery=2, linewidth=0)
+        # One legend entry for all three reference series.
+        ax.plot([], [], 'o', color='0.35', markersize=3, markerfacecolor='none',
+                linewidth=0, label=ref['label'])
+
     ax.set_xlabel(r'$z^+$')
     ax.set_ylabel(r'Reynolds stress$^+$')
     ax.set_xlim([0, z_plus.max()])
     ax.grid(True, alpha=0.3)
-    ax.legend()
+    ax.legend(fontsize=7)
 
 
-def plot_shear_vorticity(z_c, uw, dUdz, u_tau, nu, ax_uw, ax_omega):
+def plot_shear_vorticity(z_c, uw, dUdz, u_tau, nu, ax_uw, ax_omega, ref=None):
     """Plot shear stress and mean vorticity (dU/dz) in square subplots.
 
     The last (topmost) point is dropped: the one-sided dU/dz there depends on
@@ -227,11 +330,17 @@ def plot_shear_vorticity(z_c, uw, dUdz, u_tau, nu, ax_uw, ax_omega):
     z_plus = compute_wall_coordinates(z_c, u_tau, nu)
 
     # Shear stress: -<u'w'> / u_tau^2
-    ax_uw.plot(z_plus, -uw / u_tau**2, 'k-', linewidth=1.5)
+    if ref is not None:
+        ax_uw.plot(ref['z_plus'], -ref['uw_plus'], 'o', color='tab:red',
+                   markersize=3, markerfacecolor='none', markevery=2,
+                   linewidth=0, label=ref['label'])
+    ax_uw.plot(z_plus, -uw / u_tau**2, 'k-', linewidth=1.5, label='torChannel')
     ax_uw.set_xlabel(r'$z^+$')
     ax_uw.set_ylabel(r"$-\langle u'w' \rangle^+$")
     ax_uw.set_xlim([0, z_plus.max()])
     ax_uw.grid(True, alpha=0.3)
+    if ref is not None:
+        ax_uw.legend(fontsize=7)
 
     # Mean vorticity: omega_y ≈ dU/dz (since dW/dx = 0 statistically)
     # Inner scaling: omega_y * nu / u_tau^2
@@ -415,8 +524,38 @@ def main():
                        help='Canopy height h (open-channel canopy run): normalize by '
                             'u_tau,out from the TOTAL stress at z=h (Monti et al. 2022 '
                             'convention), report Re_tau,in / Re_tau,out and mark z=h')
+    parser.add_argument('--reference', default=None, metavar='NAME|PATH',
+                       help='Overlay published DNS profiles. Bundled datasets: '
+                            + ', '.join(sorted(REFERENCE_DATASETS))
+                            + '. Or give a path to a CSV in the same format '
+                              '(see scripts/fetch_reference_data.py). NOTE these '
+                              'are CLOSED-channel data: on an open channel expect '
+                              'agreement near the wall and a physical difference '
+                              'toward the centreline.')
+
+    parser.add_argument('--open-channel', action='store_true', dest='open_channel',
+                       help='Free-slip/symmetry top wall (delta = Lz, ONE wall). '
+                            'Auto-detected from --config when boundary_conditions.'
+                            'top_wall.type is neumann, and from the profile itself; '
+                            'this flag forces it.')
 
     args = parser.parse_args()
+
+    ref = load_reference(args.reference) if args.reference else None
+
+    # Open-channel detection. Explicit flag wins; otherwise read the config.
+    open_channel = args.open_channel
+    if not open_channel and args.config is not None:
+        try:
+            with open(args.config, 'r') as _fh:
+                _cfg = yaml.safe_load(_fh) or {}
+            _bc = (_cfg.get('boundary_conditions') or {}).get('top_wall') or {}
+            if _bc.get('type') == 'neumann':
+                open_channel = True
+                print("  Detected open channel from config "
+                      "(boundary_conditions.top_wall.type: neumann)")
+        except (OSError, yaml.YAMLError):
+            pass
 
     # Validate that --config is provided when using --checkpoint
     if args.checkpoint and args.config is None:
@@ -495,16 +634,48 @@ def main():
         nu_from_file = data.get('nu', None)
         u_tau_from_file = data.get('u_tau', None)
 
-    # Compute domain parameters
-    # Lz is approximately z_c[0] + z_c[-1] due to symmetry of grid
-    Lz = z_c[0] + z_c[-1]
-    delta = Lz / 2  # Half-channel height (should be ~1.0)
-    print(f"  Domain height Lz = {Lz:.6f} (estimated from z_c)")
+    # dz_f sums to Lz exactly; both file kinds may carry it.
+    dz_f_from_file = data['dz_f'] if 'dz_f' in data.files else None
+
+    # Profile-based sanity check. On a closed channel U_mean[-1] is a near-wall
+    # value and so is small; a large one means a free-slip top that was not
+    # declared, which would silently inflate u_tau.
+    if not open_channel and len(U_mean) > 2:
+        if abs(U_mean[-1]) > 0.25 * float(np.max(np.abs(U_mean))):
+            print(f"\n  WARNING: U_mean at the top of the domain is "
+                  f"{U_mean[-1]:.4f}, which is {U_mean[-1] / np.max(np.abs(U_mean)):.0%} "
+                  f"of the profile maximum.\n"
+                  f"           That is a free surface, not a no-slip wall. Treating "
+                  f"it as a wall folds the\n"
+                  f"           free-surface gradient into u_tau and inflates it "
+                  f"several-fold. Pass --open-channel\n"
+                  f"           (or --config with top_wall.type: neumann) if this "
+                  f"is an open-channel run.\n")
+
+    # Compute domain parameters.
+    # z_c[0] + z_c[-1] is only equal to Lz on a SYMMETRIC grid; with 'bottom' or
+    # 'double' stretching it is not (0.9915 vs 1.0 on the Re_tau=180 open-channel
+    # case). dz_f sums to Lz exactly, so prefer it when the file has it.
+    if dz_f_from_file is not None:
+        Lz = float(np.sum(dz_f_from_file))
+        print(f"  Domain height Lz = {Lz:.6f} (exact, from dz_f)")
+    else:
+        Lz = z_c[0] + z_c[-1]
+        print(f"  Domain height Lz = {Lz:.6f} (estimated from z_c; assumes a "
+              f"symmetric grid)")
+
+    # delta is BC-dependent: Lz/2 for a closed channel (two walls), Lz for an
+    # open channel (one wall + free-slip top). The canopy branch below overrides
+    # this again with Lz - h.
+    delta = Lz if open_channel else Lz / 2
+    if open_channel:
+        print(f"  Open channel (free-slip top): delta = Lz = {delta:.6f}")
 
     # Compute dU/dz correctly from U_mean (ignore dUdz_mean from file)
     # Note: omega_y_mean ≈ dU/dz since dW/dx = 0 statistically
     # Now using augmented grid with wall points for better accuracy
-    dUdz_mean, dUdz_wall_bot, dUdz_wall_top = compute_dUdz(U_mean, z_c, Lz)
+    dUdz_mean, dUdz_wall_bot, dUdz_wall_top = compute_dUdz(
+        U_mean, z_c, Lz, open_channel=open_channel)
     print(f"  Computed dU/dz from U_mean profile (with augmented wall points)")
 
     # Premultiply spectra: kx * ky * E(kx, ky)
@@ -554,11 +725,16 @@ def main():
     # At top (z=Lz), U decreases to 0, so dU/dz < 0.
     # So shear stress magnitude is |tau|.
     tau_wall_top = nu * abs(dUdz_wall_top)
-    
+
     u_tau_bot = np.sqrt(tau_wall_bot)
     u_tau_top = np.sqrt(tau_wall_top)
-    
-    u_tau_from_data = 0.5 * (u_tau_bot + u_tau_top)
+
+    if open_channel:
+        # One wall only. Averaging in a "top wall" value here would fold in the
+        # free-surface gradient and inflate u_tau by a large factor.
+        u_tau_from_data = u_tau_bot
+    else:
+        u_tau_from_data = 0.5 * (u_tau_bot + u_tau_top)
     Re_tau_from_data = u_tau_from_data * delta / nu
 
     # Determine u_tau for plotting/scaling
@@ -621,7 +797,7 @@ def main():
     ax_U_outer = fig1.add_subplot(gs1[0, 0])
     ax_U_inner = fig1.add_subplot(gs1[0, 1])
 
-    plot_mean_velocity(z_c, U_mean, u_tau, nu, ax_U_outer, ax_U_inner)
+    plot_mean_velocity(z_c, U_mean, u_tau, nu, ax_U_outer, ax_U_inner, ref=ref)
     fig1.suptitle(f'Mean Velocity Profile ({n_samples} samples)', fontsize=12)
     if canopy_h is not None:
         # outer plot: U on x, z on y -> horizontal tip line; inner plot: z+ on x
@@ -632,7 +808,7 @@ def main():
     fig2 = plt.figure(figsize=(8, 6))
     ax_stresses = fig2.add_subplot(111)
 
-    plot_reynolds_stresses_normal(z_c, uu_mean, vv_mean, ww_mean, u_tau, nu, ax_stresses)
+    plot_reynolds_stresses_normal(z_c, uu_mean, vv_mean, ww_mean, u_tau, nu, ax_stresses, ref=ref)
     fig2.suptitle(f'Normal Reynolds Stresses ({n_samples} samples)', fontsize=12)
     if canopy_h is not None:
         ax_stresses.axvline(canopy_h * u_tau / nu, color='gray', linestyle='--', linewidth=1, alpha=0.8)
@@ -644,8 +820,11 @@ def main():
     ax_uw = fig3.add_subplot(gs3[0, 0])
     ax_omega = fig3.add_subplot(gs3[0, 1])
 
-    plot_shear_vorticity(z_c, uw_mean, dUdz_mean, u_tau, nu, ax_uw, ax_omega)
+    plot_shear_vorticity(z_c, uw_mean, dUdz_mean, u_tau, nu, ax_uw, ax_omega, ref=ref)
     fig3.suptitle(f'Shear Stress and Mean Velocity Gradient ({n_samples} samples)', fontsize=12)
+    if canopy_h is not None:
+        ax_uw.axvline(canopy_h * u_tau / nu, color='gray', linestyle='--', linewidth=1, alpha=0.8)
+        ax_omega.axvline(canopy_h * u_tau / nu, color='gray', linestyle='--', linewidth=1, alpha=0.8)
 
     # Figure 4: 2D premultiplied spectra (4 subplots)
     # Multi-plane mode (canopy runs): one figure per stored plane
