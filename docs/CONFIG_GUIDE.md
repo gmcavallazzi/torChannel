@@ -203,6 +203,22 @@ type: "laminar"
 - Uniform velocity U = U_bulk
 - Primarily for testing
 
+### Reproducibility
+
+- **seed** (int, optional): seeds the random perturbation added by the
+  `parabolic`/`uniform` initializers. Without it the draw comes from PyTorch's
+  global generator and a fresh start is **not** repeatable run to run. Ignored
+  when restarting or interpolating, since those take the field from a file.
+
+```yaml
+initialization:
+  type: "vortices"
+  perturbation_intensity: 0.05
+  seed: 20260803
+```
+
+Note the canopy has its own independent `canopy.seed` for filament placement.
+
 ### Restart from Checkpoint
 
 To restart from a saved flow field:
@@ -371,11 +387,12 @@ scheme: "FE"
 
 ## Compute Device
 
-Selects CPU or GPU for computation.
+Selects CPU or GPU, and the working precision.
 
 ```yaml
 compute:
-  device: "auto"  # Options: "cuda", "cpu", "auto"
+  device: "auto"        # Options: "cuda", "cpu", "auto"
+  precision: "float64"  # Options: "float64", "mixed", "float32"
 ```
 
 ### Parameters
@@ -384,6 +401,39 @@ compute:
   - **"auto"** (recommended): Automatically use GPU if available, otherwise CPU
   - **"cuda"**: Force GPU (will error if CUDA not available)
   - **"cpu"**: Force CPU (useful for debugging)
+
+- **precision** (string, default `"float64"`): working precision for the
+  velocity and pressure fields and the operators acting on them.
+
+  | value | fields | Poisson solve | typical use |
+  |---|---|---|---|
+  | `float64` | float64 | float64 | **default**; the reference path, bit-exact |
+  | `mixed` | float32 | float64 | production on memory- or time-limited hardware |
+  | `float32` | float32 | float32 | maximum speed, validate before trusting |
+
+  Statistics accumulators, grid metrics (`z_c`, `z_f`, `dz_c`, `dz_f`), the
+  bulk-velocity integral and the forcing controller stay **float64 in every
+  mode** — they are cheap and are where error would accumulate.
+
+  `mixed` keeps the pressure solve in float64 because the Poisson wall-normal
+  operator is ill-conditioned at the lowest horizontal wavenumbers, where
+  float32 costs ~1e-5 relative error in the largest-scale pressure. Measured on
+  the Re_τ=180 case, the divergence floor is ~7e-6 under `mixed` against ~2.4e-5
+  under `float32` (and ~4e-14 in float64).
+
+  **Expect ~2× faster, not 64×.** These kernels are memory-bandwidth bound, so
+  halving the bytes is what you collect; the fp64:fp32 arithmetic ratio barely
+  enters. Memory does halve, so ~1.26× the linear resolution fits on the same
+  card — often the more useful half. Regenerate the numbers with
+  `python tests/bench_precision.py`.
+
+  **float16/bfloat16 are rejected**, with an explanation: `1/dz_min²` reaches
+  ~6e6 on a Re_τ=550 grid, against an fp16 maximum of 65504.
+
+  A note on trusting reduced precision: at Re_τ=180 the flow's own Lyapunov
+  time means *any* two runs diverge pointwise within a few eddy turnovers, so
+  pointwise agreement is not the test. Compare statistics (u_τ, U⁺, the stress
+  profiles, the total-stress balance) over a converged window instead.
 
 ### GPU Requirements
 
@@ -469,11 +519,13 @@ statistics:
 
 ### Basic Parameters
 
-- **enabled** (boolean): Enable statistics collection
-  - `true`: Collect statistics
-  - `false`: Skip statistics (faster, less storage)
+> **There is no `enabled` key.** Some older configs carry one; the code ignores
+> it completely. Statistics are enabled by **`n_stats > 0`** and disabled by
+> `n_stats: 0`. A config that sets `enabled: true` but omits `n_stats` collects
+> nothing, silently.
 
-- **n_stats** (integer): Collection interval
+- **n_stats** (integer): Collection interval — **this is the on/off switch**
+  - `0` disables statistics entirely
   - Collect statistics every n_stats steps
   - Should be divisible by n_out for efficiency
 
@@ -496,48 +548,29 @@ statistics:
 
 ### Spectral Parameters
 
-- **z_plus_target** (float): Height in wall units for 2D spectra
-  - Compute 2D premultiplied energy spectra at $z^+ \approx$ z_plus_target
-  - Typical value: 15.0 (buffer layer)
-  - Code finds closest grid point to this value
+Two modes. Prefer `spectra_z`.
 
-### Restart Statistics
+- **spectra_z** (list of floats, recommended): PHYSICAL heights at which to
+  accumulate 2D premultiplied energy spectra. Each height gets its own
+  spectrum; no wall-mirroring, no assumption about the number of walls.
 
-To continue accumulating statistics from a previous run:
+  ```yaml
+  statistics:
+    spectra_z: [0.0833, 0.25, 0.5]   # z+ = 15 at Re_tau=180 with delta=1
+  ```
 
-```yaml
-restart_state_file: "results/turbulence_stats_state.npz"
-```
+- **z_plus_target** (float, legacy): height in wall units for the 2D spectra.
 
-- Loads running sums and sample count from previous run
-- Continues adding to statistics
-- Final statistics will include all samples (old + new)
+  > **Do not use this on an open channel or a canopy run.** This path assumes a
+  > closed channel with two no-slip walls: it hard-codes δ = L_z/2 and averages a
+  > "bottom wall" plane with a "top wall" plane. With δ = L_z (free-slip top) it
+  > therefore selects a plane at **half** the requested z⁺ and pairs it with one
+  > at the free surface. On the Re_τ=180 open-channel case, `z_plus_target: 15.0`
+  > actually lands on z⁺ = 7.4.
 
-**Important**: The checkpoint file contains:
-- Running sums (not yet divided by n_samples)
-- Sample count
-- Grid parameters (for validation)
+  It remains correct for a closed channel with `top_wall.type: dirichlet` and a
+  symmetric grid.
 
-### Statistics Computed
-
-**Mean profiles (functions of z):**
-- U(z): Mean streamwise velocity
-- dU/dz(z): Mean velocity gradient
-
-**Reynolds stresses (functions of z):**
-- $\langle u'u' \rangle(z)$: Streamwise variance
-- $\langle v'v' \rangle(z)$: Spanwise variance
-- $\langle w'w' \rangle(z)$: Wall-normal variance
-- $\langle u'w' \rangle(z)$: Reynolds shear stress
-
-**2D Energy Spectra (at $z^+ \approx$ z_plus_target):**
-- $E_{uu}(k_x, k_y)$: Streamwise velocity spectra
-- $E_{vv}(k_x, k_y)$: Spanwise velocity spectra
-- $E_{ww}(k_x, k_y)$: Wall-normal velocity spectra
-- $E_{uw}(k_x, k_y)$: Cross-spectra
-- Stored as premultiplied: $k_x \times k_y \times E(k_x, k_y)$
-
----
 
 ## Example Configurations
 
