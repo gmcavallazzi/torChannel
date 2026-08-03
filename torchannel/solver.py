@@ -297,7 +297,8 @@ class ChannelFlow:
                                                              perturbation_intensity=config['initialization'].get('perturbation_intensity', 0.0),
                                                              n_vortices=config['initialization'].get('n_vortices', 4),
                                                              device=self.device,
-                                                             top_wall_bc_type=self.top_wall_bc_type)
+                                                             top_wall_bc_type=self.top_wall_bc_type,
+                                                             seed=config['initialization'].get('seed', None))
             self.initial_step = 0
             self.time = 0.0
             self.initial_time = 0.0

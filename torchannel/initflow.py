@@ -105,7 +105,7 @@ def initialize_flow_interpolated(field_file, nx, ny, nz, Lx, Ly, Lz, z_c, z_f,
     return u.contiguous(), v.contiguous(), w.contiguous(), p
 
 
-def initialize_flow(nx, ny, nz, z_c, Ly, Lz, U_bulk=1.0, init_type='parabolic', perturbation_intensity=0.0, n_vortices=4, device='cpu', top_wall_bc_type='dirichlet'):
+def initialize_flow(nx, ny, nz, z_c, Ly, Lz, U_bulk=1.0, init_type='parabolic', perturbation_intensity=0.0, n_vortices=4, device='cpu', top_wall_bc_type='dirichlet', seed=None):
     """Initialize velocity and pressure fields. Creates tensors on specified device (CPU or CUDA)."""
     u = torch.zeros(nx+1, ny+2, nz+2, device=device)
     v = torch.zeros(nx+2, ny+1, nz+2, device=device)
@@ -186,14 +186,28 @@ def initialize_flow(nx, ny, nz, z_c, Ly, Lz, U_bulk=1.0, init_type='parabolic', 
 
     # Add random perturbations
     if perturbation_intensity > 0.0 and init_type != 'vortices':
-        print(f"Adding random perturbation with intensity {perturbation_intensity} * U_bulk", flush=True)
+        print(f"Adding random perturbation with intensity {perturbation_intensity} * U_bulk"
+              + (f" (seed={seed})" if seed is not None else " (UNSEEDED)"), flush=True)
         noise_scale = perturbation_intensity * U_bulk
-        
+
+        # An explicit CPU generator, so the draw is reproducible and independent
+        # of global RNG state and of device -- the same pattern canopy.py uses
+        # for filament placement. Without initialization.seed the draw comes from
+        # the global default generator and a fresh start is not repeatable.
+        def _noise(ref):
+            if seed is None:
+                return (torch.rand_like(ref) - 0.5) * 2 * noise_scale
+            gen = torch.Generator().manual_seed(seed + _noise.call)
+            _noise.call += 1
+            r = torch.rand(ref.shape, generator=gen, dtype=ref.dtype)
+            return (r.to(ref.device) - 0.5) * 2 * noise_scale
+        _noise.call = 0
+
         # Add noise to internal cells, avoiding boundaries
         # For Z (last dim), use 2:-2 to avoid the first and last fluid points next to the wall
-        u[1:-1, 1:-1, 2:-2] += (torch.rand_like(u[1:-1, 1:-1, 2:-2]) - 0.5) * 2 * noise_scale
-        v[1:-1, 1:-1, 2:-2] += (torch.rand_like(v[1:-1, 1:-1, 2:-2]) - 0.5) * 2 * noise_scale
-        w[1:-1, 1:-1, 2:-2] += (torch.rand_like(w[1:-1, 1:-1, 2:-2]) - 0.5) * 2 * noise_scale
+        u[1:-1, 1:-1, 2:-2] += _noise(u[1:-1, 1:-1, 2:-2])
+        v[1:-1, 1:-1, 2:-2] += _noise(v[1:-1, 1:-1, 2:-2])
+        w[1:-1, 1:-1, 2:-2] += _noise(w[1:-1, 1:-1, 2:-2])
 
     # Apply BCs to ghost cells
     u[:, :, 0] = -u[:, :, 1]
