@@ -421,6 +421,9 @@ class ChannelFlow:
         # no-slip, which is the default and reproduces the uncontrolled flow
         # exactly. See set_wall_velocity() and torchannel/control.py.
         self._wall_velocity = None
+        # Momentum-balance instrumentation (see step_imex).
+        self._f_prev_used = None
+        self._f_applied = None
 
         self._pgraph = None
         self._pg_cudagraph = (os.environ.get("TORCHANNEL_POISSON_CUDAGRAPH", "0") == "1"
@@ -707,6 +710,56 @@ class ChannelFlow:
         w[:, 0, 0] = w[:, -2, 0]
         w[:, -1, 0] = w[:, 1, 0]
 
+    def discrete_wall_stress(self):
+        """Wall stress exactly as the solver's own viscous operator forms it.
+
+        The z-diffusion stencil uses (u[k]-u[k-1])/dz_c[k-1] across faces, so the
+        flux through the wall face is nu*(u[1]-u[0])/dz_c[0] with the reflected
+        ghost u[0] = -u[1]. Reconstructing it here rather than differentiating
+        the mean profile keeps the check on the SAME discrete quantity the
+        momentum equation actually balances.
+
+        Returns (tau_bottom, tau_top) per unit density; tau_top is None for a
+        free-slip top.
+        """
+        u = self.u
+        tau_bot = float(self.nu * (u[1:self.nx + 1, 1:self.ny + 1, 1]
+                                   - u[1:self.nx + 1, 1:self.ny + 1, 0]).mean()
+                        / self.dz_c[0])
+        if self.top_wall_bc_type == 'neumann':
+            return tau_bot, None
+        tau_top = float(self.nu * (u[1:self.nx + 1, 1:self.ny + 1, -2]
+                                   - u[1:self.nx + 1, 1:self.ny + 1, -1]).mean()
+                        / self.dz_c[-1])
+        return tau_bot, tau_top
+
+    def momentum_balance(self):
+        """Compare the force actually applied against the discrete wall drag.
+
+        In a statistically steady channel with the bulk velocity held fixed,
+        dU_b/dt = 0, so the applied body force must balance the wall drag
+        EXACTLY and instantaneously, not merely on average:
+
+            f_applied * delta  ==  mean wall stress
+
+        Returns a dict; 'ratio' is 1 when the discrete balance closes.
+        """
+        if self._f_applied is None:
+            return None
+        if self.canopy is not None:
+            delta = self.Lz - self.canopy_h
+        elif self.top_wall_bc_type == 'neumann':
+            delta = self.Lz
+        else:
+            delta = self.Lz / 2.0
+        tb, tt = self.discrete_wall_stress()
+        tau = tb if tt is None else 0.5 * (tb + tt)
+        f_app = float(self._f_applied)
+        f_rep = float(self.forcing)
+        return dict(f_applied=f_app, f_reported=f_rep, tau_wall=tau,
+                    ratio=f_app * delta / tau if tau != 0 else float('nan'),
+                    ratio_reported=f_rep * delta / tau if tau != 0 else float('nan'))
+
     def _audit_dtypes(self):
         """Assert the tensors that matter carry the dtypes they are meant to.
 
@@ -896,6 +949,18 @@ class ChannelFlow:
         # Add bulk forcing (pressure gradient) to RHS (after if-else)
         # This matches .susa where add_mom_forcing is called before time integration
         rhs_u_explicit += self.forcing
+
+        # MOMENTUM-BALANCE INSTRUMENTATION.
+        # self.forcing enters the RHS *before* the AB2 combination, so the force
+        # actually applied this step is 1.5*f_n - 0.5*f_{n-1}, NOT the f_n that
+        # gets logged. For a stationary series the means agree, but reported and
+        # applied are different objects, so record the applied one explicitly.
+        _f_now = self.forcing
+        if self._f_prev_used is None:
+            self._f_applied = _f_now                       # first step: plain Euler
+        else:
+            self._f_applied = 1.5 * _f_now - 0.5 * self._f_prev_used
+        self._f_prev_used = _f_now
 
         # Store in current buffer (reuse allocation) - MOVED OUTSIDE if-else
         if self.rhs_u_curr is None:
@@ -1126,6 +1191,13 @@ class ChannelFlow:
                 u_tau_scalar = u_tau.item() if torch.is_tensor(u_tau) else u_tau
                 forcing_scalar = forcing.item() if torch.is_tensor(forcing) else forcing
 
+                # Discrete momentum-balance check (should be 1.0 exactly).
+                _mb = self.momentum_balance()
+                if _mb is not None:
+                    print(f"  momentum balance: f_applied*delta/tau_wall = {_mb['ratio']:.6f}"
+                          f"   (using the REPORTED forcing: {_mb['ratio_reported']:.6f})",
+                          flush=True)
+
                 # Canopy diagnostics: streamwise drag on the fluid and the
                 # equilibrium estimate of the friction velocity at the canopy
                 # tip, u_tau,tip = sqrt(forcing * (Lz - h)) (momentum balance
@@ -1201,6 +1273,13 @@ class ChannelFlow:
                     u_tau = compute_u_tau(self.u, self.z_c, self.nu, top_wall_bc_type=self.top_wall_bc_type)
                     u_tau_scalar = u_tau.item() if torch.is_tensor(u_tau) else u_tau
                     forcing_scalar = forcing.item() if torch.is_tensor(forcing) else forcing
+
+                # Discrete momentum-balance check (should be 1.0 exactly).
+                _mb = self.momentum_balance()
+                if _mb is not None:
+                    print(f"  momentum balance: f_applied*delta/tau_wall = {_mb['ratio']:.6f}"
+                          f"   (using the REPORTED forcing: {_mb['ratio_reported']:.6f})",
+                          flush=True)
 
                 # Save accumulated time series data to binary file
                 if timeseries_data['index'] > 0:

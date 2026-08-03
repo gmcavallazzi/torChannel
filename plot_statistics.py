@@ -205,6 +205,8 @@ REFERENCE_DATASETS = {
     'mkm180': 'Moser et al. (1999), $Re_\\tau=178$',
     'mkm590': 'Moser et al. (1999), $Re_\\tau=587$',
     'lm550': 'Lee \\& Moser (2015), $Re_\\tau=543$',
+    'vreman180_s2': 'Vreman \\& Kuerten (2014), spectral',
+    'vreman180_fd2': 'Vreman \\& Kuerten (2014), 2nd-order FD',
 }
 
 
@@ -386,7 +388,8 @@ def plot_shear_vorticity(z_c, uw, dUdz, u_tau, nu, ax_uw, ax_omega, ref=None,
     ax_omega.grid(True, alpha=0.3)
 
 
-def plot_total_stress_decomposition(z_c, uw, dUdz, u_tau, nu, ax, delta=None):
+def plot_total_stress_decomposition(z_c, uw, dUdz, u_tau, nu, ax, delta=None,
+                                    open_channel=False):
     """
     Plot total stress with decomposition into Reynolds stress and viscous stress components.
 
@@ -429,8 +432,17 @@ def plot_total_stress_decomposition(z_c, uw, dUdz, u_tau, nu, ax, delta=None):
     # would tilt the reference and overstate the deviation.
     delta_plus = (delta * u_tau / nu) if delta is not None else z_plus.max()
     exact = 1.0 - z_plus / delta_plus
-    ax.plot([0.0, delta_plus], [1.0, 0.0], '--', color='0.45', linewidth=1.2,
-            label=r'$1 - z/\delta$ (exact)')
+    # The line must span the WHOLE domain. In a closed channel that is 0..2delta,
+    # where the total stress is antisymmetric: +1 at the bottom wall, 0 at the
+    # centreline, -1 at the top. Drawing it only to (delta+, 0) truncates it at
+    # the centreline and makes a correct profile look wrong.
+    # Cover the plotted data, and at least out to delta+ so the line reaches its
+    # zero crossing. A closed channel shown as its lower half stops at delta+; a
+    # full-depth plot (--full-channel) has z_plus.max() = 2 delta+ and covers
+    # itself.
+    zp_hi = max(float(z_plus.max()), delta_plus)
+    ax.plot([0.0, zp_hi], [1.0, 1.0 - zp_hi / delta_plus], '--', color='0.45',
+            linewidth=1.2, label=r'$1 - z/\delta$ (exact)')
 
     # Plot total stress with thicker line
     ax.plot(z_plus, total_stress_plus, 'k-', linewidth=2.5,
@@ -438,7 +450,12 @@ def plot_total_stress_decomposition(z_c, uw, dUdz, u_tau, nu, ax, delta=None):
 
     # Quantify the departure, away from the top boundary where the one-sided
     # dU/dz is BC-dependent.
-    interior = z_plus < 0.9 * delta_plus
+    # Which range the deviation is measured over. In an OPEN channel the top is a
+    # free surface where the one-sided dU/dz is BC-dependent, so it is excluded.
+    # In a CLOSED channel both ends are genuine no-slip walls and the whole
+    # profile is meaningful -- excluding z+ > 0.9 delta+ there would silently
+    # measure only the lower half.
+    interior = (z_plus < 0.9 * delta_plus) if open_channel else np.ones_like(z_plus, bool)
     if interior.any():
         err = np.abs(total_stress_plus[interior] - exact[interior])
         ax.text(0.97, 0.97,
@@ -450,7 +467,7 @@ def plot_total_stress_decomposition(z_c, uw, dUdz, u_tau, nu, ax, delta=None):
     ax.set_ylabel(r'Stress$^+$')
     # Must reach delta+, not just the last plotted cell: the exact line is drawn
     # out to delta+ and was previously clipped ~4 wall units short of zero.
-    ax.set_xlim([0, max(float(z_plus.max()), float(delta_plus))])
+    ax.set_xlim([0, zp_hi])
     ax.grid(True, alpha=0.3)
     ax.legend(loc='best', framealpha=0.9)
 
@@ -592,6 +609,11 @@ def main():
                               'agreement near the wall and a physical difference '
                               'toward the centreline.')
 
+    parser.add_argument('--full-channel', action='store_true', dest='full_channel',
+                       help='For a closed channel, plot the whole 0..2delta depth '
+                            'instead of just the lower half. The bundled reference '
+                            'data are half-channel profiles, so the default (lower '
+                            'half) is what makes the overlay comparable.')
     parser.add_argument('--open-channel', action='store_true', dest='open_channel',
                        help='Free-slip/symmetry top wall (delta = Lz, ONE wall). '
                             'Auto-detected from --config when boundary_conditions.'
@@ -757,6 +779,27 @@ def main():
     dUdz_mean, dUdz_wall_bot, dUdz_wall_top = compute_dUdz(
         U_mean, z_c, Lz, open_channel=open_channel)
     print(f"  Computed dU/dz from U_mean profile (with augmented wall points)")
+
+    # --- closed channel: show only the lower half -------------------------
+    # The bundled references (MKM, Lee & Moser) are HALF-channel profiles,
+    # z/delta = 0..1. Plotting a full channel over 0..2delta against them puts
+    # the two on different abscissae and makes a correct antisymmetric total
+    # stress look wrong. dU/dz is computed on the FULL profile first, above, so
+    # the centreline derivative is still two-sided and correct.
+    if not open_channel and not args.full_channel:
+        half = z_c <= delta * (1.0 + 1e-12)
+        n_half = int(half.sum())
+        print(f"  Closed channel: plotting the lower half only "
+              f"({n_half} of {len(z_c)} points, z <= delta = {delta:.4f}). "
+              f"Use --full-channel to override.")
+        z_c = z_c[half]
+        U_mean = U_mean[half]
+        uu_mean = uu_mean[half]; vv_mean = vv_mean[half]
+        ww_mean = ww_mean[half]; uw_mean = uw_mean[half]
+        dUdz_mean = dUdz_mean[half]
+        _half_mask = half
+    else:
+        _half_mask = None
 
     # Premultiply spectra: kx * ky * E(kx, ky)
     # Create 2D wavenumber grids
@@ -945,7 +988,8 @@ def main():
     fig5 = plt.figure(figsize=(6, 6))
     ax_total = fig5.add_subplot(111)
 
-    plot_total_stress_decomposition(z_c, uw_mean, dUdz_mean, u_tau, nu, ax_total, delta=delta)
+    plot_total_stress_decomposition(z_c, uw_mean, dUdz_mean, u_tau, nu, ax_total,
+                                    delta=delta, open_channel=open_channel)
     fig5.suptitle('Total Stress Decomposition', fontsize=12)
     if canopy_h is not None:
         ax_total.axvline(canopy_h * u_tau / nu, color='gray', linestyle='--', linewidth=1, alpha=0.8)
@@ -955,6 +999,8 @@ def main():
     if 'uuu_mean' in data.files and not args.checkpoint:
         uuu = data['uuu_mean']
         www = data['www_mean']
+        if _half_mask is not None:
+            uuu = uuu[_half_mask]; www = www[_half_mask]
         with np.errstate(divide='ignore', invalid='ignore'):
             S_u = uuu / np.maximum(uu_mean, 1e-300) ** 1.5
             S_w = www / np.maximum(ww_mean, 1e-300) ** 1.5

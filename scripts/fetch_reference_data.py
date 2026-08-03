@@ -38,8 +38,20 @@ import os
 import sys
 import urllib.request
 
+import numpy as np
+
 BASE_MKM = "https://turbulence.oden.utexas.edu/data/MKM"
 BASE_LM = "https://turbulence.oden.utexas.edu/channel2015/data"
+BASE_VRE = "http://www.vremanresearch.nl"
+
+# Vreman & Kuerten's Re_tau=180 comparison databases. Same box as MKM chan180
+# (4pi x 2 x 4pi/3) but far better resolved, and available in BOTH spectral and
+# second-order finite-difference form -- which makes them the right reference for
+# separating "under-resolved" from "FD differs from spectral".
+VREMAN = {
+    "vreman180_s2":  ("Chan180_S2",  "Vreman & Kuerten, spectral 384x193x192"),
+    "vreman180_fd2": ("Chan180_FD2", "Vreman & Kuerten, finite-difference 512x256x256"),
+}
 
 # name -> (means_url, stress_url, kind, citation)
 DATASETS = {
@@ -100,6 +112,68 @@ def _re_tau(text, default=None):
     return default
 
 
+def _vreman_rows(text):
+    rows = []
+    for line in text.splitlines():
+        t = line.strip()
+        if not t or t[0] in "%#":
+            continue
+        try:
+            rows.append([float(x) for x in t.split()])
+        except ValueError:
+            continue
+    return np.asarray(rows)
+
+
+def convert_vreman(name, outdir):
+    """Vreman & Kuerten Re_tau=180 -> torChannel axes.
+
+    Their y is wall-normal, so the remap is the same as for MKM: their v is our
+    w, their w is our v, and their <u'v'> is our <u'w'>. Confirmed against the
+    near-wall asymptotics (their rms(v) peaks at 0.84, rms(w) at 1.09 -- the
+    wall-normal component must be the smaller one).
+
+    Data are normalised on u_tau and H with nu = 1/180, so the tabulated <u> IS
+    U+ and the rms values ARE already divided by u_tau; the header's computed
+    u_tau (0.9999...) is divided out for exactness.
+    """
+    tag, cite = VREMAN[name]
+    txt = {c: _fetch(f"{BASE_VRE}/{tag}_basic_{c}.txt") for c in "uvw"}
+    ut = 1.0
+    for line in txt["u"].splitlines():
+        if "Computed u_tau" in line:
+            ut = float(line.split(":")[1])
+            break
+    U, V, W = (_vreman_rows(txt[c]) for c in "uvw")
+    zp = U[:, 0]
+    out = []
+    for i in range(len(zp)):
+        out.append((zp[i] / 180.0,          # z/delta
+                    zp[i],                  # z+
+                    U[i, 1] / ut,           # U+
+                    (U[i, 2] / ut) ** 2,    # uu+   (their u  -> our u)
+                    (W[i, 2] / ut) ** 2,    # vv+   (their w  -> our v, spanwise)
+                    (V[i, 2] / ut) ** 2,    # ww+   (their v  -> our w, wall-normal)
+                    V[i, 5] / ut ** 2))     # uw+   (their <u'v'> -> our <u'w'>)
+
+    os.makedirs(outdir, exist_ok=True)
+    path = os.path.join(outdir, f"{name}.csv")
+    with open(path, "w") as fh:
+        fh.write(f"# {cite}\n")
+        fh.write(f"# Vreman & Kuerten, 'Comparison of DNS databases of turbulent\n")
+        fh.write(f"#   channel flow at Re_tau=180', Phys. Fluids 26, 015102 (2014)\n")
+        fh.write(f"# Downloaded from {BASE_VRE}/{tag}_basic_[uvw].txt\n")
+        fh.write(f"# Domain 4pi x 2 x 4pi/3, computed u_tau = {ut}\n")
+        fh.write("# Actual Re_tau = 180.0\n")
+        fh.write("# Closed channel, lower half (z/delta = 0..1). Reynolds stresses are\n"
+                 "# REMAPPED to torChannel axes: their v (wall-normal) -> ww,\n"
+                 "# their w (spanwise) -> vv, their <u'v'> -> uw.\n")
+        fh.write("z_delta,z_plus,U_plus,uu_plus,vv_plus,ww_plus,uw_plus\n")
+        for r in out:
+            fh.write(",".join(f"{v:.6e}" for v in r) + "\n")
+    return path, 180.0, len(out)
+
+
 def convert(name, outdir):
     means_url, stress_url, kind, citation = DATASETS[name]
     means_txt, stress_txt = _fetch(means_url), _fetch(stress_url)
@@ -150,13 +224,15 @@ def convert(name, outdir):
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     p.add_argument("--outdir", default="torchannel/data/reference")
-    p.add_argument("--only", choices=sorted(DATASETS), help="convert one dataset")
+    p.add_argument("--only", choices=sorted(DATASETS) + sorted(VREMAN),
+                   help="convert one dataset")
     a = p.parse_args(argv)
 
-    names = [a.only] if a.only else sorted(DATASETS)
+    all_names = sorted(DATASETS) + sorted(VREMAN)
+    names = [a.only] if a.only else all_names
     for n in names:
         try:
-            path, re_tau, npts = convert(n, a.outdir)
+            path, re_tau, npts = (convert_vreman if n in VREMAN else convert)(n, a.outdir)
         except Exception as exc:  # network or format problem: report, keep going
             print(f"{n:8s} FAILED: {exc}", file=sys.stderr)
             continue
