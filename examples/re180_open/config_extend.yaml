@@ -81,9 +81,15 @@ solver:
 time:
   dt: 0.005
   n_steps: 2000000000
-  t_max: 1000.0            # extend the averaging window from 200 to 950 t.u.
-                           # (16 -> ~76 washouts). Deviation from the exact
-                           # total stress should fall ~1/sqrt(N): 0.0089 -> ~0.004.
+  t_max: 422.0             # 30 WASHOUTS OF AVERAGING IN TOTAL, and no more.
+                           # One washout = Lx/U_b = 12.566 t.u.
+                           #   already accumulated : 200 t.u. = 15.9 washouts
+                           #   this extension adds : 177 t.u. = 14.1 washouts
+                           #   total               : 377 t.u. = 30.0 washouts
+                           # ~46 min. Sample count roughly doubles (2201 -> ~4200),
+                           # so the total-stress deviation should go 0.0089 ->
+                           # ~0.0063. Diminishing returns beyond this: 1/sqrt(N)
+                           # means every further halving costs 4x the compute.
   CFL_target: 0.28
   dt_update_interval: 10
   dt_max: 0.015
