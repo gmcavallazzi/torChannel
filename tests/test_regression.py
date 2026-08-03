@@ -284,6 +284,48 @@ def test_reference_profiles_are_physical(name):
 
 
 # --------------------------------------------------------------------------
+# Packaging: the core install must actually work
+# --------------------------------------------------------------------------
+
+def test_solver_imports_without_optional_dependencies():
+    """`pip install -e .` (torch, numpy, pyyaml) must be enough to run a case.
+
+    Regression: utils.py imported matplotlib at module scope, and utils is on
+    the core import path (solver -> utils). A minimal install therefore could
+    not even import the solver, contradicting pyproject, where matplotlib lives
+    in the optional [plot] extra. Caught by CI, which installs only [test].
+    """
+    import subprocess
+    import textwrap
+
+    repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    code = textwrap.dedent("""
+        import builtins
+        _real = builtins.__import__
+        BLOCKED = ("matplotlib", "scipy", "skimage")
+
+        def guard(name, *a, **k):
+            if name.split(".")[0] in BLOCKED:
+                raise ImportError("No module named %r (simulated core install)" % name)
+            return _real(name, *a, **k)
+
+        builtins.__import__ = guard
+        import solver, operators, utils, turbstats, canopy
+        import initflow, projection, projection_fft, tridiag
+        import torchannel.solver
+        from solver import ChannelFlow
+        assert solver is torchannel.solver
+        print("OK")
+    """)
+    env = dict(os.environ, PYTORCH_JIT="0")
+    r = subprocess.run([sys.executable, "-c", code], cwd=repo, env=env,
+                       capture_output=True, text=True)
+    assert r.returncode == 0, (
+        "the solver cannot be imported with only the core dependencies:\n"
+        + r.stderr[-1500:])
+
+
+# --------------------------------------------------------------------------
 # GPU
 # --------------------------------------------------------------------------
 

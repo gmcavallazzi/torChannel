@@ -1,7 +1,12 @@
 import os
 import math
 import torch
-import matplotlib.pyplot as plt
+
+# matplotlib is imported lazily inside the plotting helpers below, NOT at module
+# scope. utils is on the core import path (solver -> utils), so a top-level
+# import here made matplotlib a hard requirement for running a simulation --
+# contradicting pyproject, where it lives in the optional [plot] extra. A
+# minimal `pip install -e .` could not even import the solver.
 
 def generate_grid(gamma, nz, Lz, device='cpu', stretching_type='symmetric'):
     """
@@ -250,6 +255,7 @@ def save_grid_csv(z_f, z_c, dz_f, dz_c, nz, results_folder):
 
 def plot_grid(z_f, z_c, results_folder):
     import numpy as np
+    import matplotlib.pyplot as plt
     plt.figure()
     # Convert to CPU for plotting
     plt.plot(np.arange(len(z_f)), z_f.cpu().numpy(), 'o-', label='z_f (faces)')
@@ -263,6 +269,7 @@ def plot_grid(z_f, z_c, results_folder):
     plt.close()
 
 def plot_profile(data, coord, data_label, coord_label, title, filename, results_folder):
+    import matplotlib.pyplot as plt
     plt.figure()
     plt.plot(data.cpu().numpy(), coord.cpu().numpy())
     plt.xlabel(data_label)
