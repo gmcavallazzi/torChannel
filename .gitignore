@@ -8,8 +8,10 @@ matlab/
 .pytest_cache/
 
 # Config files
-config.yaml
-config_sharma_validation.yaml
+# NOTE: anchored to the repo root on purpose. An unanchored "config.yaml"
+# matches at ANY depth, which silently excluded examples/*/config.yaml.
+/config.yaml
+/config_sharma_validation.yaml
 
 # Legacy IBM files (removed feature); the RKPM canopy IBM IS tracked
 *cylinder*
@@ -68,8 +70,13 @@ BACKUP*/
 timeseries.csv
 timeseries.npz
 
-# Exceptions: Keep example results if desired
-# !example_results/
+# Exceptions: shipped data. These are small, curated and belong in the repo --
+# validation statistics and figures, and the digitised reference DNS profiles.
+!validation/
+!validation/**/*.npz
+!validation/**/*.png
+!validation/**/*.pdf
+!torchannel/data/**/*.csv
 
 # Log files
 *.log

@@ -1,0 +1,75 @@
+# ==============================================================================
+# Re_tau = 180 OPEN CHANNEL -- torChannel validation case
+# ==============================================================================
+# Open channel: no-slip bottom wall, free-slip (symmetry) top. delta = Lz = 1.
+#
+# Seeded from an equilibrated CaNS field (CaNS_DRL/run0_theory_big,
+# no_actuation_lumley/fld_0120.bin -> Re_tau = 180.7, u_bulk = 1.0), converted
+# with scripts/cans_to_npz.py and regridded by the 'interpolate' initializer.
+#
+# NOTE the CaNS box is 10.68 x 3.2 and this box is 4pi x 2pi, so 'interpolate'
+# stretches the seed ~18% in x and ~2x in y. Spanwise streak spacing therefore
+# arrives wrong and needs the transient below to re-equilibrate. This also means
+# comparison against the CaNS baseline is STATISTICAL, not like-for-like.
+# ------------------------------------------------------------------------------
+
+grid:
+  nx: 192
+  ny: 192
+  nz: 128
+
+domain:
+  Lx: 12.566370614359172   # 4*pi
+  Ly: 6.283185307179586    # 2*pi
+  Lz: 1.0                  # open channel: Lz = delta
+  stretching_type: "bottom"   # cluster at the single (bottom) wall only
+
+flow:
+  Re: 2870.0       # NOTE: the solver reads this as nu = 1/Re  -> nu = 3.4843e-4
+  Re_tau: 180.0    # diagnostic/target only; delta = Lz for a neumann top wall
+  U_bulk: 1.0      # enforced by the bulk-velocity forcing controller
+  gamma: 1.6       # -> dz1+ = 0.37, dz_max+ = 2.44, 22 cells below z+ = 10
+
+boundary_conditions:
+  top_wall:
+    type: "neumann"   # free-slip / symmetry: open channel
+
+initialization:
+  type: "interpolate"          # fresh start: time resets to 0, field rescaled to U_bulk
+  field_file: "examples/re180_open/seed180_cans.npz"
+
+solver:
+  type: "fft"
+
+time:
+  dt: 0.005
+  n_steps: 2000000000
+  t_max: 500.0             # 100 t.u. transient + 400 t.u. statistics (~25 eddy turnovers)
+  CFL_target: 0.28
+  dt_update_interval: 10
+  dt_max: 0.015
+  dt_min: 0.0001
+  scheme: "IMEX"
+
+compute:
+  device: "auto"
+
+output:
+  results_folder: results_re180_open
+  n_out: 200
+  n_save: 4000
+
+statistics:
+  # NOTE: the enable switch is n_stats > 0. There is no 'enabled' key.
+  n_stats: 50        # ~660 samples over the 400 t.u. averaging window
+  t_stats: 100.0     # start after the box-stretch transient has died out
+  output_file: "turbulence_stats.npz"
+  state_file: "turbulence_stats_state.npz"
+
+  # Use the multi-plane spectra mode (PHYSICAL heights), NOT z_plus_target.
+  # The legacy z_plus_target path hard-codes delta = Lz/2 and averages a
+  # "bottom wall" and "top wall" plane -- both wrong for an open channel, where
+  # delta = Lz and there is no top wall. With z_plus_target: 15.0 it actually
+  # selects z+ = 7.4 and pairs it with a plane at the free surface.
+  # z+ = 15 at Re_tau = 180 with delta = 1  ->  z = 15/180 = 0.0833
+  spectra_z: [0.0833, 0.25, 0.5]
