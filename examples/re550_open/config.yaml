@@ -1,0 +1,80 @@
+# ==============================================================================
+# Re_tau = 550 OPEN CHANNEL -- torChannel validation case
+# ==============================================================================
+# Open channel: no-slip bottom wall, free-slip (symmetry) top. delta = Lz = 1.
+#
+# Seeded by INTERPOLATING the converged Re_tau=180 field (examples/re180_open).
+# Both cases have Lz = 1, so the 'interpolate' initializer applies directly; x
+# and y are mapped proportionally from 4pi x 2pi onto 2pi x pi.
+#
+# Box: 2pi x pi, matching the Moser-Kim-Mansour Re_tau=590 box, so
+# `--reference mkm590` is a like-for-like box comparison. `--reference lm550`
+# (Lee & Moser, Re_tau=543) is closer in Reynolds number but used a much larger
+# 8pi x 3pi box.
+#
+# COST: ~15 h on one GB10 at float64. Estimated from the measured Re_tau=180 run
+# (56.7 ms/step at 4.7M cells, dt = 0.0037): scaling cells to 16.4M gives
+# ~197 ms/step, and the finer grid tightens the CFL to dt ~ 0.0011, so 300 time
+# units is ~270k steps. Submit with sbatch; do not run interactively.
+# ------------------------------------------------------------------------------
+
+grid:
+  nx: 320
+  ny: 320
+  nz: 160
+
+domain:
+  Lx: 6.283185307179586    # 2*pi
+  Ly: 3.141592653589793    # pi
+  Lz: 1.0                  # open channel: Lz = delta
+  stretching_type: "bottom"
+
+flow:
+  Re: 10000.0      # NOTE: the solver reads this as nu = 1/Re -> nu = 1e-4
+  Re_tau: 550.0    # delta = Lz for a neumann top wall
+  U_bulk: 1.0
+  gamma: 2.0       # -> dz1+ = 0.51, dz_max+ = 7.13, 17 cells below z+ = 10
+
+boundary_conditions:
+  top_wall:
+    type: "neumann"
+
+initialization:
+  type: "interpolate"       # fresh start: time resets to 0, field rescaled to U_bulk
+  field_file: "results_re180_open/fields.npz"
+
+solver:
+  type: "fft"
+
+time:
+  dt: 0.001
+  n_steps: 2000000000
+  t_max: 300.0             # 80 t.u. transient + 220 t.u. statistics (~12 eddy
+                           # turnovers; delta/u_tau = 18.2 at this Re_tau)
+  CFL_target: 0.28
+  dt_update_interval: 10
+  dt_max: 0.004
+  dt_min: 0.00005
+  scheme: "IMEX"
+
+compute:
+  device: "auto"
+  # precision: "mixed"     # ~2x faster and halves memory. Left at the float64
+                           # default here: this run is a VALIDATION reference,
+                           # so it should not also be the first exercise of a
+                           # new precision path.
+
+output:
+  results_folder: results_re550_open
+  n_out: 500
+  n_save: 10000
+
+statistics:
+  n_stats: 100       # ~2200 samples over the 220 t.u. averaging window
+  t_stats: 80.0      # after the Re_tau 180 -> 550 transient
+  output_file: "turbulence_stats.npz"
+  state_file: "turbulence_stats_state.npz"
+
+  # Physical heights, NOT z_plus_target -- see examples/re180_open/README.md.
+  # z+ = 15 at Re_tau = 550 with delta = 1  ->  z = 15/550 = 0.0273
+  spectra_z: [0.0273, 0.1, 0.5]
