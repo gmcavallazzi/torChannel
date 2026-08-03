@@ -30,7 +30,31 @@ domain:
   stretching_type: "bottom"
 
 flow:
-  Re: 10000.0      # NOTE: the solver reads this as nu = 1/Re -> nu = 1e-4
+  # Re_b TO BE MATCHED TO A PUBLISHED REFERENCE, as done for the Re_tau=180 case.
+  # Do NOT leave this at the round 10000: pick the reference first, integrate its
+  # own U+ profile for Re_b = <U+> * Re_tau, and set flow.Re to that.
+  #
+  #   mkm590   Moser, Kim & Mansour (1999), Re_tau = 587.19
+  #   lm550    Lee & Moser (2015),          Re_tau = 543.50
+  #
+  # mkm590 is the like-for-like BOX match (2pi x pi, as configured here);
+  # lm550 is closer in Reynolds number but used a much larger 8pi x 3pi box.
+  # Already computed by integrating each reference's own U+ profile:
+  #
+  #   reference   Re_tau    <U+>      Re_b = flow.Re    box
+  #   mkm590      587.19   18.6539     10953.4          2pi x pi   <- matches THIS box
+  #   lm550       543.50   18.3883      9994.0          8pi x 3pi
+  #
+  # These are NOT interchangeable and the choice changes what the run is:
+  #   - mkm590 gives a like-for-like comparison (matched Re_b AND matched box),
+  #     but lands at Re_tau ~ 587, so the case is no longer "Re_tau = 550".
+  #   - lm550 stays near Re_tau ~ 543 but its box is 8pi x 3pi, so the outer
+  #     region is not comparable.
+  # The existing grid resolves either (dx+ = 10.8 at 550, 11.5 at 587).
+  #
+  # Note the old placeholder 10000 happened to sit within 0.1% of the lm550
+  # target -- coincidence, not a matched value.
+  Re: 10000.0      # PLACEHOLDER -- set to 10953.4 (mkm590) or 9994.0 (lm550)
   Re_tau: 550.0    # delta = Lz for a neumann top wall
   U_bulk: 1.0
   gamma: 2.0       # -> dz1+ = 0.51, dz_max+ = 7.13, 17 cells below z+ = 10

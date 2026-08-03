@@ -49,8 +49,19 @@ boundary_conditions:
     type: "neumann"   # free-slip / symmetry: open channel
 
 initialization:
-  type: "interpolate"          # fresh start: time resets to 0, field rescaled to U_bulk
-  field_file: "examples/re180_open/seed180_cans.npz"
+  # CONTINUATION at the new nu, from the converged Re_b = 2870 field.
+  #
+  # Restart (not interpolate): same grid, same box, so the field transfers
+  # exactly -- only nu changes. Starting from fully developed turbulence 2.7%
+  # away in Re_b needs a far shorter transient than a cold start, and avoids
+  # re-running the box-stretch adjustment that the CaNS seed required.
+  #
+  # For a cold start from scratch, use instead:
+  #   type: "interpolate"
+  #   field_file: "examples/re180_open/seed180_cans.npz"
+  type: "parabolic"                 # ignored: field_file makes this a restart
+  field_file: "results_re180_open_Reb2870/fields.npz"
+  reset_time: true                  # t = 0 so t_stats below is meaningful
 
 solver:
   type: "fft"
@@ -76,7 +87,10 @@ output:
 statistics:
   # NOTE: the enable switch is n_stats > 0. There is no 'enabled' key.
   n_stats: 50        # ~660 samples over the 400 t.u. averaging window
-  t_stats: 100.0     # start after the box-stretch transient has died out
+  t_stats: 100.0     # generous: the seed is already turbulent at nearly this
+                     # Reynolds number, so the nu adjustment should settle in
+                     # well under one transient. Watch u_tau in the log and move
+                     # this earlier if it plateaus sooner.
   output_file: "turbulence_stats.npz"
   state_file: "turbulence_stats_state.npz"
 
