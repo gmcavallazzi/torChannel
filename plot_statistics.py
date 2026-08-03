@@ -263,6 +263,19 @@ def load_reference(name):
     return ref
 
 
+def _xmax(z_plus, ref=None):
+    """Upper x limit covering every series on the axis.
+
+    A reference dataset can extend past the simulation's last cell centre (or
+    the other way round); taking only the data's own max silently crops
+    whichever is longer.
+    """
+    hi = float(np.max(z_plus))
+    if ref is not None:
+        hi = max(hi, float(np.max(ref['z_plus'])))
+    return hi
+
+
 def plot_mean_velocity(z_c, U_mean, u_tau, nu, ax_outer, ax_inner, ref=None):
     """Plot mean velocity profile in outer and inner coordinates."""
     # Outer coordinates: U vs z
@@ -291,7 +304,7 @@ def plot_mean_velocity(z_c, U_mean, u_tau, nu, ax_outer, ax_inner, ref=None):
     ax_inner.semilogx(z_plus, U_plus, 'k-', linewidth=1.5, label='torChannel')
     ax_inner.set_xlabel(r'$z^+$')
     ax_inner.set_ylabel(r'$U^+$')
-    ax_inner.set_xlim([0.5, z_plus.max()])
+    ax_inner.set_xlim([0.5, _xmax(z_plus, ref)])
     ax_inner.set_ylim([0, max(U_plus.max(), 1.0) * 1.15])
     ax_inner.grid(True, alpha=0.3, which='both')
     ax_inner.legend(fontsize=7, loc='upper left')
@@ -316,7 +329,7 @@ def plot_reynolds_stresses_normal(z_c, uu, vv, ww, u_tau, nu, ax, ref=None):
 
     ax.set_xlabel(r'$z^+$')
     ax.set_ylabel(r'Reynolds stress$^+$')
-    ax.set_xlim([0, z_plus.max()])
+    ax.set_xlim([0, _xmax(z_plus, ref)])
     ax.grid(True, alpha=0.3)
     ax.legend(fontsize=7)
 
@@ -337,7 +350,7 @@ def plot_shear_vorticity(z_c, uw, dUdz, u_tau, nu, ax_uw, ax_omega, ref=None):
     ax_uw.plot(z_plus, -uw / u_tau**2, 'k-', linewidth=1.5, label='torChannel')
     ax_uw.set_xlabel(r'$z^+$')
     ax_uw.set_ylabel(r"$-\langle u'w' \rangle^+$")
-    ax_uw.set_xlim([0, z_plus.max()])
+    ax_uw.set_xlim([0, _xmax(z_plus, ref)])
     ax_uw.grid(True, alpha=0.3)
     if ref is not None:
         ax_uw.legend(fontsize=7)
@@ -348,7 +361,8 @@ def plot_shear_vorticity(z_c, uw, dUdz, u_tau, nu, ax_uw, ax_omega, ref=None):
     ax_omega.plot(z_plus, omega_y_plus, 'k-', linewidth=1.5)
     ax_omega.set_xlabel(r'$z^+$')
     ax_omega.set_ylabel(r'$\mathrm{d}U/\mathrm{d}z^+$')
-    ax_omega.set_xlim([0, z_plus.max()])
+    # Same range as the shear panel it shares a figure with.
+    ax_omega.set_xlim([0, _xmax(z_plus, ref)])
     ax_omega.axhline(0, color='gray', linestyle='--', linewidth=0.5)
     ax_omega.grid(True, alpha=0.3)
 
@@ -415,7 +429,9 @@ def plot_total_stress_decomposition(z_c, uw, dUdz, u_tau, nu, ax, delta=None):
 
     ax.set_xlabel(r'$z^+$')
     ax.set_ylabel(r'Stress$^+$')
-    ax.set_xlim([0, z_plus.max()])
+    # Must reach delta+, not just the last plotted cell: the exact line is drawn
+    # out to delta+ and was previously clipped ~4 wall units short of zero.
+    ax.set_xlim([0, max(float(z_plus.max()), float(delta_plus))])
     ax.grid(True, alpha=0.3)
     ax.legend(loc='best', framealpha=0.9)
 
