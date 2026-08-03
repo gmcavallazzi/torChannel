@@ -54,10 +54,11 @@ flow:
   #
   # Note the old placeholder 10000 happened to sit within 0.1% of the lm550
   # target -- coincidence, not a matched value.
-  Re: 10000.0      # PLACEHOLDER -- set to 10953.4 (mkm590) or 9994.0 (lm550)
-  Re_tau: 550.0    # delta = Lz for a neumann top wall
+  Re: 10953.4      # MATCHED to mkm590 (matched box chosen over the nominal label)
+                   # -> nu = 9.1296e-5, and Re_tau should land near 587, NOT 550.
+  Re_tau: 587.0    # expected outcome at the matched Re_b; delta = Lz (neumann top)
   U_bulk: 1.0
-  gamma: 2.0       # -> dz1+ = 0.51, dz_max+ = 7.13, 17 cells below z+ = 10
+  gamma: 2.0       # at Re_tau 587: dz1+ = 0.54, dz_max+ = 7.6, dx+ = 11.5, dy+ = 5.8
 
 boundary_conditions:
   top_wall:
@@ -73,8 +74,13 @@ solver:
 time:
   dt: 0.001
   n_steps: 2000000000
-  t_max: 300.0             # 80 t.u. transient + 220 t.u. statistics (~12 eddy
-                           # turnovers; delta/u_tau = 18.2 at this Re_tau)
+  t_max: 150.0             # 40 t.u. transient + 110 t.u. statistics (~6.5 eddy
+                           # turnovers; delta/u_tau = 17.0 at Re_tau 587).
+                           # NOTE this is a deliberately short averaging window:
+                           # the mean profile converges quickly but the u'u' peak
+                           # and the spectra will still carry visible scatter.
+                           # Extend by restarting with restart_state_file if the
+                           # figures need it.
   CFL_target: 0.28
   dt_update_interval: 10
   dt_max: 0.004
@@ -94,11 +100,11 @@ output:
   n_save: 10000
 
 statistics:
-  n_stats: 100       # ~2200 samples over the 220 t.u. averaging window
-  t_stats: 80.0      # after the Re_tau 180 -> 550 transient
+  n_stats: 50        # ~2000 samples over the 110 t.u. averaging window
+  t_stats: 40.0      # after the Re_tau 180 -> 587 transient
   output_file: "turbulence_stats.npz"
   state_file: "turbulence_stats_state.npz"
 
   # Physical heights, NOT z_plus_target -- see examples/re180_open/README.md.
-  # z+ = 15 at Re_tau = 550 with delta = 1  ->  z = 15/550 = 0.0273
-  spectra_z: [0.0273, 0.1, 0.5]
+  # z+ = 15 at Re_tau = 587 with delta = 1  ->  z = 15/587 = 0.0256
+  spectra_z: [0.0256, 0.1, 0.5]

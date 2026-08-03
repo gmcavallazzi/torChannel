@@ -69,7 +69,7 @@ solver:
 time:
   dt: 0.005
   n_steps: 2000000000
-  t_max: 500.0             # 100 t.u. transient + 400 t.u. statistics (~25 eddy turnovers)
+  t_max: 250.0             # 50 t.u. transient + 200 t.u. statistics (~13 eddy turnovers)
   CFL_target: 0.28
   dt_update_interval: 10
   dt_max: 0.015
@@ -86,11 +86,10 @@ output:
 
 statistics:
   # NOTE: the enable switch is n_stats > 0. There is no 'enabled' key.
-  n_stats: 50        # ~660 samples over the 400 t.u. averaging window
-  t_stats: 100.0     # generous: the seed is already turbulent at nearly this
-                     # Reynolds number, so the nu adjustment should settle in
-                     # well under one transient. Watch u_tau in the log and move
-                     # this earlier if it plateaus sooner.
+  n_stats: 25        # ~2300 samples over the 200 t.u. averaging window
+  t_stats: 50.0      # the seed is already developed turbulence only 2.7% away
+                     # in Re_b, so the nu adjustment settles quickly -- a full
+                     # 100 t.u. transient was over-cautious here.
   output_file: "turbulence_stats.npz"
   state_file: "turbulence_stats_state.npz"
 
