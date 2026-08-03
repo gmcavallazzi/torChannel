@@ -203,6 +203,7 @@ def reconstruct_grid_from_config(config_file, nx, ny, nz):
 #: Reference datasets bundled with the package (see scripts/fetch_reference_data.py).
 REFERENCE_DATASETS = {
     'mkm180': 'Moser et al. (1999), $Re_\\tau=178$',
+    'mkm395': 'Moser et al. (1999), $Re_\\tau=392$',
     'mkm590': 'Moser et al. (1999), $Re_\\tau=587$',
     'lm550': 'Lee \\& Moser (2015), $Re_\\tau=543$',
     'vreman180_s2': 'Vreman \\& Kuerten (2014), spectral',

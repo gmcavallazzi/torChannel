@@ -1,6 +1,8 @@
 # Moser, Kim & Mansour (1999), Phys. Fluids 11(4), 943-945
+# Numerical method: Kim, Moin & Moser, 1987, J. Fluid Mech. vol 177, 133-166
 # Downloaded from https://turbulence.oden.utexas.edu/data/MKM/chan180/profiles/chan180.means
 #                 https://turbulence.oden.utexas.edu/data/MKM/chan180/profiles/chan180.reystress
+#   (read from the bundle https://turbulence.oden.utexas.edu/data/MKM/chandata.tar.gz)
 # Actual Re_tau = 178.12
 # Closed channel, lower half (z/delta = 0..1). Reynolds stresses are
 # REMAPPED to torChannel axes: reference R_vv (wall-normal) -> ww,

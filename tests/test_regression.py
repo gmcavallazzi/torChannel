@@ -346,7 +346,8 @@ def test_open_channel_u_tau_ignores_the_free_surface():
 # Bundled reference data
 # --------------------------------------------------------------------------
 
-@pytest.mark.parametrize("name", ["mkm180", "mkm590", "lm550"])
+@pytest.mark.parametrize("name", ["mkm180", "mkm395", "mkm590", "lm550",
+                                  "vreman180_s2", "vreman180_fd2"])
 def test_reference_profiles_are_physical(name):
     """Guards the y-wall-normal -> z-wall-normal remap in fetch_reference_data.
 
@@ -366,7 +367,10 @@ def test_reference_profiles_are_physical(name):
         assert key in ref, f"missing column {key}"
 
     z = ref["z_plus"]
-    assert z[0] == pytest.approx(0.0, abs=1e-9)
+    # Collocation databases start exactly at the wall; a finite-volume one
+    # (Vreman's FD2) starts at its first cell centre, z+ ~ 0.24. Both are fine;
+    # what matters is that the profile begins inside the viscous sublayer.
+    assert 0.0 <= z[0] < 1.0, f"profile does not start at the wall (z+ = {z[0]})"
     assert np.all(np.diff(z) > 0), "z+ must be increasing"
 
     near = (z > 0.5) & (z < 5.0)
