@@ -1,0 +1,92 @@
+# ==============================================================================
+# Re_tau = 180 CLOSED (FULL) CHANNEL -- torChannel validation case
+# ==============================================================================
+# Two no-slip walls, delta = Lz/2 = 1. Re_b = 2792.8 matched to Moser, Kim &
+# Mansour (1999) chan180, exactly as the open-channel case.
+#
+# WHY THIS RUN: MKM is a CLOSED channel. The open-channel case agreed with it
+# near the wall but necessarily departed above z+ ~ 130, where a free surface
+# suppresses w' and redistributes energy into u' and v'. Running the full
+# channel removes that caveat and makes the comparison like-for-like everywhere.
+#
+# GRID: the symmetric tanh grid on [0, 2] with nz = 256 has a lower half that is
+# BIT-IDENTICAL to the 'bottom' grid on [0, 1] with nz = 128 used by the open
+# channel (verified: max|dz_f difference| = 0). So the mirrored seed lands on
+# this grid with no interpolation whatsoever, and the near-wall resolution is
+# unchanged: dz+ = 0.37 at both walls, dx+ = 11.8, dy+ = 5.9.
+#
+# COST: ~2.8 h. 2x the cells of the open channel, but CFL 0.4 (vs 0.28) buys a
+# 1.43x larger dt, so it is only ~1.4x per unit physical time.
+# ------------------------------------------------------------------------------
+
+grid:
+  nx: 192
+  ny: 192
+  nz: 256                  # 2 x the open channel: same resolution, twice the depth
+
+domain:
+  Lx: 12.566370614359172   # 4*pi
+  Ly: 6.283185307179586    # 2*pi
+  Lz: 2.0                  # closed channel: delta = Lz/2 = 1
+  stretching_type: "symmetric"   # cluster at BOTH walls
+
+flow:
+  Re: 2792.8       # nu = 1/Re = 3.5807e-4; Re_b matched to MKM chan180
+  Re_tau: 180.0    # delta = Lz/2 for a dirichlet top wall
+  U_bulk: 1.0      # averaged over the FULL height, as MKM's is
+  gamma: 1.6       # -> dz+ = 0.37 at each wall, dz+ = 2.44 at the centreline
+
+boundary_conditions:
+  top_wall:
+    type: "dirichlet"   # no-slip: closed channel
+
+initialization:
+  # Mirrored from the converged open-channel field by
+  # scripts/mirror_to_full_channel.py --shift-y --noise 0.01
+  #
+  # The spanwise shift is NOT optional. Reflection about the centreline is an
+  # exact symmetry of Navier-Stokes, so a perfectly mirrored field sits on an
+  # invariant manifold and stays symmetric indefinitely. Shifting the mirrored
+  # half by Ly/2 (many streak spacings) decorrelates the two halves at once --
+  # measured correlation of u across the centreline planes: -0.20.
+  type: "parabolic"                 # ignored: field_file makes this a restart
+  field_file: "examples/re180_closed/seed_full180.npz"
+  reset_time: true
+
+solver:
+  type: "fft"
+
+time:
+  dt: 0.004
+  n_steps: 2000000000
+  t_max: 477.0             # 100 t.u. transient + 377 t.u. (30 washouts) of stats
+  CFL_target: 0.4          # raised from 0.28; AB2 advection is stable here but
+                           # this leaves less margin -- watch max|div| and dt
+  dt_update_interval: 10
+  dt_max: 0.02
+  dt_min: 0.0001
+  scheme: "IMEX"
+
+compute:
+  device: "auto"
+
+output:
+  results_folder: results_re180_closed
+  n_out: 500
+  n_save: 10000
+
+statistics:
+  # RAISED from 25. The integral timescale of u_tau is ~10 t.u., so sampling
+  # every 25 steps (0.13 t.u.) gave ~75 samples per correlation time -- all
+  # redundant. At 200 steps (~1.06 t.u.) there are still ~9 per correlation
+  # time, which is ample, and the 2D spectra cost drops 8-fold.
+  n_stats: 200
+  t_stats: 100.0     # centreline-spanning structures must grow from scratch;
+                     # the mirror provides two decorrelated halves but no
+                     # motions that cross the centreline. ~6 eddy turnovers.
+  output_file: "turbulence_stats.npz"
+  state_file: "turbulence_stats_state.npz"
+
+  # Physical heights. z+ = 15 at Re_tau 180 with delta = 1 -> z = 0.0833;
+  # 1.0 is the centreline.
+  spectra_z: [0.0833, 0.25, 1.0]
