@@ -57,10 +57,23 @@ def _metrics(state_path, nu, open_channel):
     # cannot drift apart.
     uu, vv, ww, uw = _add_plane_mean_variance(d, n, U, uu, vv, ww, uw)
 
+    # Closed channel: FOLD about the centreline. The two halves are statistically
+    # identical, so averaging them doubles the sample count for free -- and it
+    # does so for precisely the quantity that converges slowest here, the
+    # large-scale streamwise energy in the log layer. Must happen BEFORE dU/dz is
+    # taken, or the folded shear stress would be checked against an unfolded
+    # viscous term and the total-stress residual would be meaningless.
+    if not open_channel:
+        mirror = lambda a: np.interp((2.0 * delta - z)[::-1], z, a)[::-1]
+        U = 0.5 * (U + mirror(U))          # even about the centreline
+        uu = 0.5 * (uu + mirror(uu))       # even
+        vv = 0.5 * (vv + mirror(vv))       # even
+        ww = 0.5 * (ww + mirror(ww))       # even
+        uw = 0.5 * (uw - mirror(uw))       # ODD: <u'w'> changes sign
+
     dUdz, dUdz_wall, _ = compute_dUdz(U, z, Lz, open_channel=open_channel)
     u_tau = float(np.sqrt(nu * abs(dUdz_wall)))
 
-    # Closed channel: compare the lower half only, as the references tabulate it.
     m = z <= delta if not open_channel else np.ones_like(z, dtype=bool)
     z_plus = (z * u_tau / nu)[m]
     u_rms = (np.sqrt(np.maximum(uu, 0)) / u_tau)[m]
@@ -89,7 +102,13 @@ def _compare(cur, ref_name):
     # both datasets are well resolved; the peaks are compared as peaks.
     band = (cur["z_plus"] > 20) & (cur["z_plus"] < 150)
     R_ref = np.interp(cur["z_plus"][band], zr, Rr).mean()
+    # Band AND peak: they disagree materially (the deficit is worse in the log
+    # layer than at the peak), and that gap is itself the diagnostic -- the log
+    # layer is large-scale dominated, so a band-heavy deficit points at
+    # large-scale convergence rather than at grid resolution.
+    u_band = np.interp(cur["z_plus"][band], zr, ur).mean()
     return dict(
+        d_urms_band=100 * (cur["u_rms"][band].mean() - u_band) / u_band,
         d_urms=100 * (cur["u_rms"].max() - ur.max()) / ur.max(),
         d_wrms=100 * (cur["w_rms"].max() - wr.max()) / wr.max(),
         d_uw=100 * (cur["uw"].max() - uwr.max()) / uwr.max(),
@@ -162,7 +181,8 @@ def main(argv=None):
                         c = _compare(cur, ref)
                         entry[ref] = c
                         pr = prev.get(ref) if prev else None
-                        print(f"    vs {ref:14s} u'rms {c['d_urms']:+6.2f}%{_arrow(pr, c, 'd_urms')}"
+                        print(f"    vs {ref:14s} u'rms pk {c['d_urms']:+6.2f}%{_arrow(pr, c, 'd_urms')}"
+                              f" band {c['d_urms_band']:+6.2f}%{_arrow(pr, c, 'd_urms_band')}"
                               f" | w'rms {c['d_wrms']:+6.2f}%{_arrow(pr, c, 'd_wrms')}"
                               f" | -uw {c['d_uw']:+6.2f}%{_arrow(pr, c, 'd_uw')}"
                               f" | R_uw {c['d_R']:+6.2f}%{_arrow(pr, c, 'd_R')}",
