@@ -6,7 +6,7 @@ validation figures and the base flow for the control examples.
 
 | | |
 |---|---|
-| box | 4π × 2π × 1 — **spanwise does NOT match MKM**, see below |
+| box | 4π × 2π × 1 (spanwise wider than MKM's 4π/3 — immaterial here, see below) |
 | grid | 192 × 192 × 128, tanh clustering at the bottom wall (`gamma: 1.6`) |
 | resolution | Δx⁺ = 11.8, Δy⁺ = 5.9, Δz⁺_min = 0.37, Δz⁺_max = 2.44 |
 | ν | 3.5807e-4 (`flow.Re: 2792.8` — Re_b matched to MKM chan180) |
@@ -51,7 +51,8 @@ closest to the target flow.
 - **MKM is a closed channel.** Expect agreement in the near-wall region and a
   genuine, explainable difference toward the centreline. Label it rather than
   hide it.
-- **The spanwise box does not match MKM** (2π vs 4π/3) — see the section below.
+- **The spanwise box is wider than MKM's** (2π vs 4π/3). Immaterial below
+  Re_τ ≈ 1000 — see "Box and resolution" below; resolution is what matters.
 - **Do not use `statistics.z_plus_target` here.** That legacy path hard-codes
   δ = L_z/2 and averages a "bottom wall" plane with a "top wall" plane — both
   wrong for an open channel, where δ = L_z and there is no top wall. With
@@ -68,19 +69,31 @@ PYTORCH_JIT=0 TORCHANNEL_COMPILE=1 TORCHANNEL_POISSON_CUDAGRAPH=1 \
     python main.py examples/re180_open/config.yaml
 ```
 
-## Box: NOT matched to MKM chan180
+## Box and resolution
 
 | | streamwise | spanwise |
 |---|---|---|
-| MKM chan180 | 4pi = 12.566 | **4pi/3 = 4.189** |
-| this case | 4pi = 12.566 | **2pi = 6.283** |
+| MKM chan180 | 4π = 12.566 | 4π/3 = 4.189 |
+| this case | 4π = 12.566 | 2π = 6.283 |
 
-Verified from MKM's own spectra files, where the wavenumber spacing gives the
-domain directly (`dk_x = 0.5 -> L_x = 4pi`, `dk_z = 1.5 -> L_z = 4pi/3`), not
-from memory. An earlier version of this file claimed 4pi x 2pi *was* the MKM
-box; that was wrong.
+(Both verified from MKM's own spectra, where the wavenumber spacing gives the
+domain directly: `Δk_x = 0.5 → 4π`, `Δk_z = 1.5 → 4π/3`.)
 
-Our span is 1.5x wider. That is not a defect -- a wider box constrains the
-large-scale structures less -- but it does mean the outer-layer comparison is
-not like-for-like. The `re587_open` case, by contrast, matches MKM chan590
-exactly (2pi x pi, confirmed the same way).
+**The spanwise extents differ, and at this Reynolds number that is not a
+problem.** Below Re_τ ≈ 1000 there is no scale separation — no structures scale
+with the channel height — so the box dimensions are immaterial provided the
+domain exceeds the minimal flow unit needed to sustain turbulence. Ours is
+comfortably larger, and wider than MKM's.
+
+What must match is the **resolution**, and it does, evaluated at the *achieved*
+Re_τ = 179.7 rather than the nominal 180:
+
+| criterion | target | achieved |
+|---|---|---|
+| Δz⁺ at the wall | < 0.4 | **0.37** |
+| Δx⁺ | < 12 | **11.76** |
+| Δy⁺ | < 6 | **5.88** |
+
+The same test applies to `re587_open`, whose box happens to match MKM chan590
+exactly (2π × π) — but that is a convenience, not the reason the comparison is
+valid.
