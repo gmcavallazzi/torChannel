@@ -104,10 +104,59 @@ class ChannelFlow:
             
             # Enable GPU performance optimizations
             torch.backends.cudnn.benchmark = True  # Auto-tune cuDNN kernels for this GPU
-            torch.backends.cuda.matmul.allow_tf32 = True  # Enable TensorFloat-32 for matmul
-            torch.backends.cudnn.allow_tf32 = True  # Enable TensorFloat-32 for convolutions
-            print("GPU optimizations enabled: cuDNN benchmark, TF32", flush=True)
+            # TF32 is DISABLED deliberately. It carries 10 mantissa bits, and
+            # there is no matmul or convolution in the hot path for it to speed
+            # up -- the solver is elementwise stencils, FFTs and tridiagonal
+            # sweeps. The one matmul that does exist is torch.linalg.solve on the
+            # RKPM moment matrix in canopy.py, where reduced precision is pure
+            # downside. Leaving TF32 on was all cost and no benefit.
+            torch.backends.cuda.matmul.allow_tf32 = False
+            torch.backends.cudnn.allow_tf32 = False
+            print("GPU optimizations enabled: cuDNN benchmark (TF32 off: "
+                  "no matmul in the hot path)", flush=True)
         print(f"{'='*80}\n", flush=True)
+
+        # ---- Precision ---------------------------------------------------
+        # NOTE: main.py's torch.set_default_dtype(torch.float64) is left alone
+        # on purpose. Almost every tensor that MUST stay fp64 is created by an
+        # un-annotated factory call (the running sums in turbstats, the grid
+        # metrics, the canopy geometry, the FFT coefficient tables), so keeping
+        # the global default at fp64 makes all of those correct for free. Only
+        # the large 3-D fields are threaded explicitly.
+        self.precision = str(config.get('compute', {}).get('precision', 'float64')).lower()
+        _valid = ('float64', 'mixed', 'float32')
+        if self.precision not in _valid:
+            if self.precision in ('float16', 'half', 'bfloat16', 'bf16'):
+                raise ValueError(
+                    f"compute.precision: {self.precision!r} is not usable here. "
+                    f"Half precision overflows on this discretisation: "
+                    f"1/dz_min^2 reaches ~6e6 on a Re_tau=550 grid, against an "
+                    f"fp16 maximum of 65504. Use one of {_valid}.")
+            raise ValueError(
+                f"Invalid compute.precision: {self.precision!r}. Must be one of {_valid}")
+
+        # dtype       : u, v, w, p, RHS buffers and the operators acting on them
+        # dtype_poisson: FFT + wall-normal Thomas sweep
+        # dtype_acc   : reductions, statistics, the forcing controller -- always
+        #               fp64; these are cheap and are where error accumulates.
+        if self.precision == 'float64':
+            self.dtype, self.dtype_poisson = torch.float64, torch.float64
+        elif self.precision == 'mixed':
+            # The Poisson z-operator is ill-conditioned at the lowest horizontal
+            # wavenumbers (kappa ~ 6e7), which shows up as ~1e-5 relative error
+            # in the largest-scale pressure if solved in fp32. The implicit
+            # z-diffusion, by contrast, is diagonally dominant (kappa ~ 1.7) and
+            # is entirely safe in fp32.
+            self.dtype, self.dtype_poisson = torch.float32, torch.float64
+        else:
+            self.dtype, self.dtype_poisson = torch.float32, torch.float32
+        self.dtype_acc = torch.float64
+
+        if self.precision != 'float64':
+            print(f"Precision: {self.precision}  (fields={self.dtype}, "
+                  f"poisson={self.dtype_poisson}, accumulators={self.dtype_acc})",
+                  flush=True)
+            print(f"{'='*80}\n", flush=True)
 
         self.nx = config['grid']['nx']
         self.ny = config['grid']['ny']
@@ -246,6 +295,24 @@ class ChannelFlow:
 
         print(f"Grid stretching type: {self.stretching_type}", flush=True)
 
+        # Compute-dtype copies of the wall-normal metrics.
+        #
+        # These are NOT optional. PyTorch promotes on mixed-dtype ops, so
+        # diffusion_u(u_fp32, ..., dz_c_fp64) runs the arithmetic in fp64 and is
+        # then silently downcast by the zeros_like + slice-assign pattern in the
+        # operators: the answer stays correct, the kernel is 2-5x slower, and
+        # nothing anywhere reports it. The fp64 originals are kept for
+        # save_grid_csv, plot_grid, TurbulenceStats and the canopy, all of which
+        # want full precision on a quantity computed once.
+        #
+        # dz_f is a difference of nearby coordinates, so it loses ~6.5 bits to
+        # cancellation in fp32 near the top of the domain. That is tolerable for
+        # the momentum stencils but not for building the Poisson coefficients,
+        # which must satisfy L = D.G exactly -- see initialize_fft_solver below,
+        # which is fed the ROUND-TRIPPED values rather than the pristine ones.
+        self.dz_f_c = self.dz_f.to(self.dtype)
+        self.dz_c_c = self.dz_c.to(self.dtype)
+
         self.dx = self.Lx / self.nx
         self.dy = self.Ly / self.ny
         
@@ -329,12 +396,31 @@ class ChannelFlow:
                                                          top_wall_bc_type=self.top_wall_bc_type)
             # print_poisson_matrix(self.poisson_matrix, self.nx, self.ny, self.nz, self.results_folder)
         elif self.solver_type == 'fft':
-            # Initialize FFT-based Poisson solver
+            # Initialize FFT-based Poisson solver.
+            #
+            # Built from the ROUND-TRIPPED metrics (dz -> compute dtype -> fp64),
+            # not the pristine fp64 ones. The divergence operator D and gradient
+            # operator G act on fields using dz_*_c; if the Laplacian L were
+            # assembled from slightly different numbers, L would no longer equal
+            # D.G and the "projection" would stop being a projection -- leaving a
+            # residual divergence that no amount of solver accuracy can remove.
+            # Under precision: float64 this is an exact no-op.
             self.fft_data = initialize_fft_solver(self.nx, self.ny, self.nz,
-                                                    self.dx, self.dy, self.dz_c, self.dz_f,
+                                                    self.dx, self.dy,
+                                                    self.dz_c_c.to(torch.float64),
+                                                    self.dz_f_c.to(torch.float64),
                                                     top_wall_bc_type=self.top_wall_bc_type)
         else:
             raise ValueError(f"Unknown solver type: {self.solver_type}")
+
+        # Optional CUDA-graph capture of the FFT-Poisson solve. The solve is a
+        # cuFFT pair plus a serial (256-launch) Thomas sweep that can't be portably
+        # compiled (the loop unrolls); a CUDA graph instead captures those launches
+        # once and replays them with ~one launch. Opt-in via TORCHANNEL_POISSON_CUDAGRAPH=1.
+        self._pgraph = None
+        self._pg_cudagraph = (os.environ.get("TORCHANNEL_POISSON_CUDAGRAPH", "0") == "1"
+                              and self.device.type == 'cuda'
+                              and self.solver_type == 'fft')
 
         # Initialize statistics collector if enabled (n_stats > 0)
         stats_config = config.get('statistics', {})
@@ -422,6 +508,16 @@ class ChannelFlow:
             self.canopy.save_geometry(self.results_folder)
             self.canopy_drag = torch.zeros(3, dtype=torch.float64, device=self.device)
 
+        # Cast the fields to the compute dtype. Done once here, after every
+        # initialization path (fresh / restart / interpolate) has produced fp64
+        # fields, so the choice of precision cannot change the initial condition
+        # itself -- only how it is subsequently stored and advanced.
+        if self.dtype != torch.float64:
+            self.u = self.u.to(self.dtype)
+            self.v = self.v.to(self.dtype)
+            self.w = self.w.to(self.dtype)
+            self.p = self.p.to(self.dtype)
+
         # Save initial fields
         u_tau_init = compute_u_tau(self.u, self.z_c, self.nu, top_wall_bc_type=self.top_wall_bc_type)
         save_flow_fields(self.u, self.v, self.w, self.p, self.z_c, self.z_f,
@@ -432,7 +528,7 @@ class ChannelFlow:
         # Project initial field to be divergence-free
         # Step 1: Compute divergence
         div = compute_divergence(self.u, self.v, self.w, self.nx, self.ny, self.nz,
-                                  self.dx, self.dy, self.dz_f)
+                                  self.dx, self.dy, self.dz_f_c)
         print(f"DEBUG: Initial max(div) before projection: {torch.max(torch.abs(div)):.6e}", flush=True)
         
         # Step 2: Solve Poisson (using a dummy dt=1.0 for projection, or just solve ∇²p = div)
@@ -441,9 +537,9 @@ class ChannelFlow:
         # So we solve ∇²p = div
         
         if self.solver_type == 'direct':
-            self.p = solve_poisson(self.poisson_matrix, div, self.nx, self.ny, self.nz, self.top_wall_bc_type)
+            self.p = self._solve_pressure(div)
         elif self.solver_type == 'fft':
-            self.p = solve_poisson_fft(div, self.fft_data)
+            self.p = self._solve_pressure(div)
             
         print(f"DEBUG: Max pressure after Poisson solve: {torch.max(torch.abs(self.p)):.6e}", flush=True)
         # Step 3: Correct velocity
@@ -452,14 +548,14 @@ class ChannelFlow:
         # So we pass dt=1.0 to project_velocity
         self.u, self.v, self.w = project_velocity(self.u, self.v, self.w, self.p,
                                                     self.nx, self.ny, self.nz,
-                                                    self.dx, self.dy, self.dz_c, self.dz_f, 1.0)
+                                                    self.dx, self.dy, self.dz_c_c, self.dz_f_c, 1.0)
                                                     
         # Reapply BCs
         self.apply_bc_uvw()  # Fused boundary conditions
 
         # Check divergence after projection
         div_final = compute_divergence(self.u, self.v, self.w, self.nx, self.ny, self.nz,
-                                        self.dx, self.dy, self.dz_f)
+                                        self.dx, self.dy, self.dz_f_c)
         max_div_final = torch.max(torch.abs(div_final))
         print(f"Initial divergence after projection: max(|div|) = {max_div_final:.6e}", flush=True)
 
@@ -475,20 +571,35 @@ class ChannelFlow:
         self.time = self.initial_time
         self.current_step = self.initial_step  # Track current step for diagnostics
 
-        # Optional CUDA-graph capture of the FFT-Poisson solve. The solve is a
-        # cuFFT pair plus a serial (256-launch) Thomas sweep that can't be portably
-        # compiled (the loop unrolls); a CUDA graph instead captures those launches
-        # once and replays them with ~one launch. Opt-in via TORCHANNEL_POISSON_CUDAGRAPH=1.
-        self._pgraph = None
-        self._pg_cudagraph = (os.environ.get("TORCHANNEL_POISSON_CUDAGRAPH", "0") == "1"
-                              and self.device.type == 'cuda'
-                              and self.solver_type == 'fft')
+
+    def _solve_pressure(self, rhs):
+        """Solve the pressure Poisson equation across the precision boundary.
+
+        rhs arrives in the compute dtype; the solve runs in dtype_poisson (fp64
+        under 'mixed', because the Poisson z-operator is ill-conditioned at the
+        lowest horizontal wavenumbers); the pressure comes back in the compute
+        dtype so the projection stays a single-dtype operation. Under
+        precision: float64 every conversion here is a no-op and the tensors are
+        returned unchanged.
+        """
+        if self.solver_type == 'direct':
+            p = solve_poisson(self.poisson_matrix, rhs.to(self.dtype_poisson),
+                              self.nx, self.ny, self.nz, self.top_wall_bc_type)
+        elif self._pg_cudagraph:
+            # The graph's static input buffer is allocated at dtype_poisson and
+            # copy_ casts on the way in, outside the replay -- so the boundary
+            # costs nothing here. It also means a dtype mistake would be
+            # absorbed silently, which is what _audit_dtypes is for.
+            p = self._poisson_fft_graphed(rhs)
+        else:
+            p = solve_poisson_fft(rhs.to(self.dtype_poisson), self.fft_data)
+        return p if p.dtype == self.dtype else p.to(self.dtype)
 
     def _poisson_fft_graphed(self, rhs):
         """Replay (or first capture) the FFT-Poisson solve as a CUDA graph.
         Returns the pressure (the solver's persistent workspace_p)."""
         if self._pgraph is None:
-            self._pg_in = rhs.clone()                       # static capture input
+            self._pg_in = rhs.to(self.dtype_poisson).clone()   # static capture input
             warm = torch.cuda.Stream()
             warm.wait_stream(torch.cuda.current_stream())
             with torch.cuda.stream(warm):
@@ -551,6 +662,35 @@ class ChannelFlow:
         """Apply boundary conditions to all velocity components (optimized fused kernel)"""
         apply_bc_all(self.u, self.v, self.w, self.top_wall_bc_type)
 
+    def _audit_dtypes(self):
+        """Assert the tensors that matter carry the dtypes they are meant to.
+
+        This is not defensive decoration. PyTorch promotes silently on mixed
+        dtypes, so a single missed cast (an fp64 metric reaching an fp32 field)
+        runs the arithmetic in fp64 and downcasts the result: numerically fine,
+        2-5x slower, and completely invisible in the output. An assertion at
+        step 1 is the only thing that catches it.
+        """
+        expected = {
+            'u': self.dtype, 'v': self.dtype, 'w': self.dtype, 'p': self.dtype,
+            'dz_f_c': self.dtype, 'dz_c_c': self.dtype,
+            # Metrics, statistics and the canopy stay fp64 whatever the fields do.
+            'dz_f': torch.float64, 'dz_c': torch.float64,
+            'z_c': torch.float64, 'z_f': torch.float64,
+        }
+        bad = []
+        for name, want in expected.items():
+            t = getattr(self, name, None)
+            if t is not None and torch.is_tensor(t) and t.dtype != want:
+                bad.append(f"{name}: {t.dtype} (expected {want})")
+        if bad:
+            raise AssertionError(
+                "Precision plumbing is inconsistent -- this would run the hot "
+                "kernels at the wrong dtype without any other symptom:\n  "
+                + "\n  ".join(bad))
+        print(f"  dtype audit OK: fields={self.dtype}, "
+              f"poisson={self.dtype_poisson}, metrics=float64", flush=True)
+
     def compute_cfl_dt(self):
         """
         Compute timestep based on CFL condition using staggered grid velocities.
@@ -566,7 +706,7 @@ class ChannelFlow:
             self.u, self.v, self.w,
             self.nx, self.ny, self.nz,
             self.dx, self.dy,
-            self.dz_f, self.dz_c
+            self.dz_f_c, self.dz_c_c
         )
 
         # Avoid division by zero
@@ -597,24 +737,24 @@ class ChannelFlow:
             rhs_u, rhs_v, rhs_w = operators.compute_momentum_rhs_fused_v2(
                 self.u, self.v, self.w,
                 self.nx, self.ny, self.nz,
-                self.dx, self.dy, self.dz_c, self.dz_f,
+                self.dx, self.dy, self.dz_c_c, self.dz_f_c,
                 self.nu
             )
         else:
             # Original separate kernels (CPU fallback or if fused not available)
             adv_u = advection_u(self.u, self.v, self.w, self.nx, self.ny, self.nz, 
-                               self.dx, self.dy, self.dz_f)
+                               self.dx, self.dy, self.dz_f_c)
             adv_v = advection_v(self.u, self.v, self.w, self.nx, self.ny, self.nz, 
-                               self.dx, self.dy, self.dz_f)
+                               self.dx, self.dy, self.dz_f_c)
             adv_w = advection_w(self.u, self.v, self.w, self.nx, self.ny, self.nz, 
-                               self.dx, self.dy, self.dz_c)
+                               self.dx, self.dy, self.dz_c_c)
             
             diff_u = diffusion_u(self.u, self.nx, self.ny, self.nz, 
-                                self.dx, self.dy, self.dz_c, self.dz_f, self.nu)
+                                self.dx, self.dy, self.dz_c_c, self.dz_f_c, self.nu)
             diff_v = diffusion_v(self.v, self.nx, self.ny, self.nz, 
-                                self.dx, self.dy, self.dz_c, self.dz_f, self.nu)
+                                self.dx, self.dy, self.dz_c_c, self.dz_f_c, self.nu)
             diff_w = diffusion_w(self.w, self.nx, self.ny, self.nz, 
-                                self.dx, self.dy, self.dz_c, self.dz_f, self.nu) # Corrected dz_f, dz_c order
+                                self.dx, self.dy, self.dz_c_c, self.dz_f_c, self.nu) # Corrected dz_f, dz_c order
             
             rhs_u = diff_u - adv_u
             rhs_v = diff_v - adv_v
@@ -646,18 +786,18 @@ class ChannelFlow:
         # === PROJECTION STEP ===
         # Step 1: Compute divergence of intermediate velocity
         div = compute_divergence(self.u, self.v, self.w, self.nx, self.ny, self.nz,
-                                  self.dx, self.dy, self.dz_f)
+                                  self.dx, self.dy, self.dz_f_c)
         
         # Step 2: Solve Poisson equation for pressure: ∇²p = div/dt
         if self.solver_type == 'direct':
-            self.p = solve_poisson(self.poisson_matrix, div / dt, self.nx, self.ny, self.nz, self.top_wall_bc_type)
+            self.p = self._solve_pressure(div / dt)
         elif self.solver_type == 'fft':
-            self.p = solve_poisson_fft(div / dt, self.fft_data)
+            self.p = self._solve_pressure(div / dt)
 
         # Step 3: Project velocity to divergence-free field: u = u* - dt*∇p
         self.u, self.v, self.w = project_velocity(self.u, self.v, self.w, self.p,
                                                     self.nx, self.ny, self.nz,
-                                                    self.dx, self.dy, self.dz_c, self.dz_f, dt)
+                                                    self.dx, self.dy, self.dz_c_c, self.dz_f_c, dt)
 
         # Reapply boundary conditions after projection
         self.apply_bc_uvw()  # Fused boundary conditions
@@ -682,18 +822,18 @@ class ChannelFlow:
             rhs_u_explicit, rhs_v_explicit, rhs_w_explicit = operators.compute_momentum_rhs_fused_imex(
                 self.u, self.v, self.w,
                 self.nx, self.ny, self.nz,
-                self.dx, self.dy, self.dz_c, self.dz_f,
+                self.dx, self.dy, self.dz_c_c, self.dz_f_c,
                 self.nu
             )
         else:
             # Original separate kernels (CPU fallback or debugging)
             # Compute advection terms
             adv_u = advection_u(self.u, self.v, self.w, self.nx, self.ny, self.nz,
-                               self.dx, self.dy, self.dz_f)
+                               self.dx, self.dy, self.dz_f_c)
             adv_v = advection_v(self.u, self.v, self.w, self.nx, self.ny, self.nz,
-                               self.dx, self.dy, self.dz_f)
+                               self.dx, self.dy, self.dz_f_c)
             adv_w = advection_w(self.u, self.v, self.w, self.nx, self.ny, self.nz,
-                               self.dx, self.dy, self.dz_c)
+                               self.dx, self.dy, self.dz_c_c)
 
             # Compute explicit diffusion in x and y only
             diff_xy_u = diffusion_xy_u(self.u, self.nx, self.ny, self.nz,
@@ -745,11 +885,11 @@ class ChannelFlow:
         # not guarded, so a varying dt reuses the compiled kernels.
         dt_t = torch.as_tensor(dt, device=self.device, dtype=torch.float64)
         self.u = solve_implicit_diffusion_u(self.u, dt_t, self.nx, self.ny, self.nz,
-                                            self.dz_c, self.dz_f, self.nu, top_wall_bc_type=self.top_wall_bc_type)
+                                            self.dz_c_c, self.dz_f_c, self.nu, top_wall_bc_type=self.top_wall_bc_type)
         self.v = solve_implicit_diffusion_v(self.v, dt_t, self.nx, self.ny, self.nz,
-                                            self.dz_c, self.dz_f, self.nu, top_wall_bc_type=self.top_wall_bc_type)
+                                            self.dz_c_c, self.dz_f_c, self.nu, top_wall_bc_type=self.top_wall_bc_type)
         self.w = solve_implicit_diffusion_w(self.w, dt_t, self.nx, self.ny, self.nz,
-                                            self.dz_c, self.dz_f, self.nu)
+                                            self.dz_c_c, self.dz_f_c, self.nu)
 
         # ========== CANOPY IBM FORCING (RKPM direct forcing) ==========
         # Applied to the fully advanced intermediate velocity, right before the
@@ -771,16 +911,10 @@ class ChannelFlow:
         # ========== PROJECTION STEP ==========
         # Step 1: Compute divergence of intermediate velocity
         div = compute_divergence(self.u, self.v, self.w, self.nx, self.ny, self.nz,
-                                 self.dx, self.dy, self.dz_f)
+                                 self.dx, self.dy, self.dz_f_c)
 
         # Step 2: Solve Poisson equation for pressure: ∇²p = div/dt
-        if self.solver_type == 'direct':
-            self.p = solve_poisson(self.poisson_matrix, div / dt, self.nx, self.ny, self.nz, self.top_wall_bc_type)
-        elif self.solver_type == 'fft':
-            if self._pg_cudagraph:
-                self.p = self._poisson_fft_graphed(div / dt)
-            else:
-                self.p = solve_poisson_fft(div / dt, self.fft_data)
+        self.p = self._solve_pressure(div / dt)
 
         # Diagnostic: check pressure solution (only every 100 steps to minimize GPU-CPU sync overhead)
         if self.current_step % 100 == 0:
@@ -792,7 +926,7 @@ class ChannelFlow:
         # compiled projection does not recompile when the adaptive dt changes.)
         self.u, self.v, self.w = project_velocity(self.u, self.v, self.w, self.p,
                                                    self.nx, self.ny, self.nz,
-                                                   self.dx, self.dy, self.dz_c, self.dz_f, dt_t)
+                                                   self.dx, self.dy, self.dz_c_c, self.dz_f_c, dt_t)
 
         # Reapply boundary conditions after projection
         self.apply_bc_uvw()  # Fused boundary conditions
@@ -877,6 +1011,8 @@ class ChannelFlow:
         print(f"Grid: {self.nx}×{self.ny}×{self.nz}  |  Domain: {self.Lx:.2f}×{self.Ly:.2f}×{self.Lz:.2f}  |  " +
               f"dx={self.dx:.3f}, dy={self.dy:.3f}, dz_min={dz_min:.3f}, dz_max={dz_max:.3f}  |  " +
               f"dx⁺={dx_plus:.1f}, dy⁺={dy_plus:.1f}, dz⁺_min={dz_min_plus:.1f}, dz⁺_max={dz_max_plus:.1f}", flush=True)
+        print("="*90, flush=True)
+        self._audit_dtypes()
         print("="*90, flush=True)
         header = (f"{'Step':>6} {'Time':>10} {'dt':>10} {'max(div)':>12} "
                   f"{'u_bulk':>10} {'u_tau':>10} {'forcing':>12}")

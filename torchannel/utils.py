@@ -294,7 +294,10 @@ def compute_u_tau(u, z_c, nu, top_wall_bc_type='dirichlet'):
         nu: Kinematic viscosity
         top_wall_bc_type: 'dirichlet' (no-slip) or 'neumann' (free-slip)
     """
-    u_mean_bot = torch.mean(u[:, :, 1])
+    # float64 accumulator: the field may be float32 under compute.precision,
+    # and u_tau feeds diagnostics and the statistics normalisation. On a float64
+    # field this is the same computation, so float64 runs are unaffected.
+    u_mean_bot = torch.mean(u[:, :, 1], dtype=torch.float64)
     dist = z_c[1]
 
     # Wall shear stress: tau_wall = nu * du/dz at wall
@@ -307,9 +310,15 @@ def compute_u_tau(u, z_c, nu, top_wall_bc_type='dirichlet'):
         # Use only bottom wall for u_tau
         return u_tau_bot
     else:
-        # No-slip top wall: Average of bottom and top
-        u_mean_top = torch.mean(u[:, :, -2])
-        tau_top = nu * u_mean_top / dist
+        # No-slip top wall: average of bottom and top.
+        # The top wall needs its OWN distance to the first interior centre.
+        # z_c is ghosted with z_c[-1] = 2*Lz - z_c[-2], so Lz - z_c[-2] is
+        # (z_c[-1] - z_c[-2])/2. Using the bottom spacing here is exact only on
+        # a symmetric grid; on 'bottom'/'double' stretching the two differ by
+        # orders of magnitude.
+        u_mean_top = torch.mean(u[:, :, -2], dtype=torch.float64)
+        dist_top = 0.5 * (z_c[-1] - z_c[-2])
+        tau_top = nu * u_mean_top / dist_top
         u_tau_top = torch.sqrt(torch.abs(tau_top))
         return 0.5*(u_tau_bot + u_tau_top)
 
@@ -328,8 +337,29 @@ def compute_bulk_velocity(u: torch.Tensor, cell_vol_ratio: torch.Tensor,
     JIT-compiled for GPU performance.
     """
     nx, ny, nz = cell_vol_ratio.shape
-    u_bulk = torch.sum(u[1:nx+1, 1:ny+1, 1:nz+1] * cell_vol_ratio) / total_volume
-    #u_bulk = torch.sum(0.5*(u[1:nx+1, 1:ny+1, 1:nz+1]+u[0:nx, 1:ny+1, 1:nz+1]) * cell_vol_ratio) / total_volume
+    u_int = u[1:nx+1, 1:ny+1, 1:nz+1]
+
+    if u_int.dtype == cell_vol_ratio.dtype:
+        # Unchanged path (all-float64 runs stay bit-for-bit identical).
+        u_bulk = torch.sum(u_int * cell_vol_ratio) / total_volume
+    else:
+        # Reduced-precision fields with float64 metrics. Multiplying directly
+        # would promote to float64 and materialise a full-size temporary --
+        # ~850 MB at production resolution -- purely to throw it away in a sum.
+        #
+        # Reduce over x and y FIRST, in the field's own dtype, then widen the
+        # resulting (nz,) column and weight it by the per-cell volume.
+        # cell_vol_ratio is uniform in x and y by construction.
+        #
+        # Note: passing dtype=torch.float64 to the reduction does NOT avoid the
+        # temporary -- measured, PyTorch upcasts the operand before reducing
+        # (12 MiB peak for a 4 MiB field). The x-y reduction is a tree reduction
+        # over ~1e4-1e5 elements, accurate to ~1e-7 relative in float32, which is
+        # far below the sampling noise this value is compared against; the
+        # subsequent volume weighting and sum are exact in float64.
+        col = torch.sum(u_int, dim=[0, 1])
+        vol = cell_vol_ratio[0, 0, :].to(torch.float64)
+        u_bulk = torch.sum(col.to(torch.float64) * vol) / total_volume
     return u_bulk
 
 

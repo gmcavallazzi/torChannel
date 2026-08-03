@@ -97,17 +97,17 @@ class TurbulenceStats:
 
         # Initialize accumulators for 1D profiles (over z)
         # All profiles are on interior points (nz points)
-        self.U_sum = torch.zeros(nz, device=device)
-        self.uu_sum = torch.zeros(nz, device=device)
-        self.vv_sum = torch.zeros(nz, device=device)
-        self.ww_sum = torch.zeros(nz, device=device)
-        self.uw_sum = torch.zeros(nz, device=device)
+        self.U_sum = torch.zeros(nz, device=device, dtype=torch.float64)
+        self.uu_sum = torch.zeros(nz, device=device, dtype=torch.float64)
+        self.vv_sum = torch.zeros(nz, device=device, dtype=torch.float64)
+        self.ww_sum = torch.zeros(nz, device=device, dtype=torch.float64)
+        self.uw_sum = torch.zeros(nz, device=device, dtype=torch.float64)
 
 
         # Third central moments (skewness) and canopy drag profile accumulators
-        self.uuu_sum = torch.zeros(nz, device=device)
-        self.www_sum = torch.zeros(nz, device=device)
-        self.fx_profile_sum = torch.zeros(nz, device=device)
+        self.uuu_sum = torch.zeros(nz, device=device, dtype=torch.float64)
+        self.www_sum = torch.zeros(nz, device=device, dtype=torch.float64)
+        self.fx_profile_sum = torch.zeros(nz, device=device, dtype=torch.float64)
 
         # Initialize accumulators for 2D energy spectra
         # Multi-plane mode (canopy): one spectrum per requested physical height.
@@ -121,15 +121,15 @@ class TurbulenceStats:
             n_pl = len(self.spectra_k)
             print(f"  2D spectra planes at z = " +
                   ", ".join(f"{z:.4f}" for z in self.spectra_z_actual), flush=True)
-            self.E_uu_2d_sum = torch.zeros(n_pl, nx//2, ny//2, device=device)
-            self.E_vv_2d_sum = torch.zeros(n_pl, nx//2, ny//2, device=device)
-            self.E_ww_2d_sum = torch.zeros(n_pl, nx//2, ny//2, device=device)
-            self.E_uw_2d_sum = torch.zeros(n_pl, nx//2, ny//2, device=device)
+            self.E_uu_2d_sum = torch.zeros(n_pl, nx//2, ny//2, device=device, dtype=torch.float64)
+            self.E_vv_2d_sum = torch.zeros(n_pl, nx//2, ny//2, device=device, dtype=torch.float64)
+            self.E_ww_2d_sum = torch.zeros(n_pl, nx//2, ny//2, device=device, dtype=torch.float64)
+            self.E_uw_2d_sum = torch.zeros(n_pl, nx//2, ny//2, device=device, dtype=torch.float64)
         else:
-            self.E_uu_2d_sum = torch.zeros(nx//2, ny//2, device=device)
-            self.E_vv_2d_sum = torch.zeros(nx//2, ny//2, device=device)
-            self.E_ww_2d_sum = torch.zeros(nx//2, ny//2, device=device)
-            self.E_uw_2d_sum = torch.zeros(nx//2, ny//2, device=device)
+            self.E_uu_2d_sum = torch.zeros(nx//2, ny//2, device=device, dtype=torch.float64)
+            self.E_vv_2d_sum = torch.zeros(nx//2, ny//2, device=device, dtype=torch.float64)
+            self.E_ww_2d_sum = torch.zeros(nx//2, ny//2, device=device, dtype=torch.float64)
+            self.E_uw_2d_sum = torch.zeros(nx//2, ny//2, device=device, dtype=torch.float64)
 
         # Wavenumber arrays for 2D spectra (for plotting/saving)
         # dx, dy are already grid spacings (Lx/nx, Ly/ny)
@@ -182,9 +182,15 @@ class TurbulenceStats:
 
         # Compute mean velocity profile U(z) by averaging over x,y
         # Average u at cell centers by interpolating in x
+        # The plane mean is reduced with a float64 accumulator (exact, and only
+        # (nz,) wide), but is cast BACK to the field dtype before forming the
+        # fluctuations. Subtracting a float64 mean from a float32 field would
+        # promote u_fluct to float64 and materialise a full-size temporary --
+        # the very allocation reduced precision is meant to avoid. On a float64
+        # field both steps are no-ops.
         u_cell_center = 0.5 * (u_int[:-1, :, :] + u_int[1:, :, :])  # (nx, ny, nz)
-        U = torch.mean(u_cell_center, dim=(0, 1))  # (nz,)
-        self.U_sum += U
+        U = torch.mean(u_cell_center, dim=(0, 1))  # (nz,), field dtype
+        self.U_sum += U.to(torch.float64)
 
         # Compute fluctuations u'(x,y,z) = u(x,y,z) - U(z)
         # Broadcast U(z) to (nx, ny, nz)
@@ -193,19 +199,27 @@ class TurbulenceStats:
         # For v and w, compute fluctuations similarly
         # v is already at cell centers in x,z, interpolate in y
         v_cell_center = 0.5 * (v_int[:, :-1, :] + v_int[:, 1:, :])  # (nx, ny, nz)
-        V = torch.mean(v_cell_center, dim=(0, 1))  # (nz,)
+        V = torch.mean(v_cell_center, dim=(0, 1))
         v_fluct = v_cell_center - V.view(1, 1, -1)
 
         # w is at cell faces in z, interpolate to cell centers
         w_cell_center = 0.5 * (w_int[:, :, :-1] + w_int[:, :, 1:])  # (nx, ny, nz)
-        W = torch.mean(w_cell_center, dim=(0, 1))  # (nz,)
+        W = torch.mean(w_cell_center, dim=(0, 1))
         w_fluct = w_cell_center - W.view(1, 1, -1)
 
         # Compute Reynolds stresses by averaging over x,y
-        uu = torch.mean(u_fluct * u_fluct, dim=(0, 1))  # (nz,)
-        vv = torch.mean(v_fluct * v_fluct, dim=(0, 1))  # (nz,)
-        ww = torch.mean(w_fluct * w_fluct, dim=(0, 1))  # (nz,)
-        uw = torch.mean(u_fluct * w_fluct, dim=(0, 1))  # (nz,)
+        # Reduce over x,y in the field's dtype, then widen the (nz,) result for
+        # accumulation. Passing dtype=torch.float64 to the reduction instead
+        # would upcast the full 3-D operand first (measured), costing ~500 MB of
+        # transient float64 at production resolution -- enough to OOM a run that
+        # otherwise fits. The x-y tree reduction is accurate to ~1e-7 relative in
+        # float32, far below the sampling noise on these statistics, and the
+        # accumulation across thousands of samples is then exact in float64.
+        A = torch.float64
+        uu = torch.mean(u_fluct * u_fluct, dim=(0, 1)).to(A)  # (nz,)
+        vv = torch.mean(v_fluct * v_fluct, dim=(0, 1)).to(A)  # (nz,)
+        ww = torch.mean(w_fluct * w_fluct, dim=(0, 1)).to(A)  # (nz,)
+        uw = torch.mean(u_fluct * w_fluct, dim=(0, 1)).to(A)  # (nz,)
 
         self.uu_sum += uu
         self.vv_sum += vv
@@ -213,8 +227,8 @@ class TurbulenceStats:
         self.uw_sum += uw
 
         # Third central moments (skewness numerators)
-        self.uuu_sum += torch.mean(u_fluct ** 3, dim=(0, 1))
-        self.www_sum += torch.mean(w_fluct ** 3, dim=(0, 1))
+        self.uuu_sum += torch.mean(u_fluct ** 3, dim=(0, 1)).to(A)
+        self.www_sum += torch.mean(w_fluct ** 3, dim=(0, 1)).to(A)
 
         # Canopy drag profile (instantaneous IBM force per z-level)
         if fx_profile is not None:
