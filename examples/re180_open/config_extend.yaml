@@ -1,0 +1,117 @@
+# ==============================================================================
+# Re_tau = 180 OPEN CHANNEL -- torChannel validation case
+# ==============================================================================
+# Open channel: no-slip bottom wall, free-slip (symmetry) top. delta = Lz = 1.
+#
+# Seeded from an equilibrated CaNS field (CaNS_DRL/run0_theory_big,
+# no_actuation_lumley/fld_0120.bin -> Re_tau = 180.7, u_bulk = 1.0), converted
+# with scripts/cans_to_npz.py and regridded by the 'interpolate' initializer.
+#
+# BOX: 4pi x 2pi. Streamwise matches MKM chan180; spanwise is wider (2pi vs
+# their 4pi/3 = 4.189, verified from their own spectra: dk_z = 1.5).
+#
+# This does not affect the comparison. Below Re_tau ~ 1000 there is no scale
+# separation -- nothing scales with the channel height -- so box dimensions are
+# immaterial as long as the domain exceeds the minimal flow unit. What must
+# match is the RESOLUTION: dz+ at the wall < 0.4, dx+ < 12, dy+ < 6. At the
+# achieved Re_tau = 179.7 this grid gives 0.37, 11.76, 5.88.
+#
+# NOTE the CaNS box is 10.68 x 3.2 and this box is 4pi x 2pi, so 'interpolate'
+# stretches the seed ~18% in x and ~2x in y. Spanwise streak spacing therefore
+# arrives wrong and needs the transient below to re-equilibrate. This also means
+# comparison against the CaNS baseline is STATISTICAL, not like-for-like.
+# ------------------------------------------------------------------------------
+
+grid:
+  nx: 192
+  ny: 192
+  nz: 128
+
+domain:
+  Lx: 12.566370614359172   # 4*pi
+  Ly: 6.283185307179586    # 2*pi
+  Lz: 1.0                  # open channel: Lz = delta
+  stretching_type: "bottom"   # cluster at the single (bottom) wall only
+
+flow:
+  # Re_b MATCHED TO MOSER, KIM & MANSOUR (1999), chan180, so the validation
+  # comparison is at the same bulk Reynolds number rather than merely the same
+  # nominal "Re_tau = 180".
+  #
+  # MKM publish everything normalised by u_tau and h; nu never appears, so their
+  # Re_b is not quoted -- it was obtained by integrating their own U+ profile:
+  #     Re_b = <U+> * Re_tau = 15.6787 * 178.124 = 2792.8
+  # (identical to 5 decimals under trapezoid on their 65 points and a 20k-point
+  # resample, so this is not a quadrature artefact.)
+  #
+  # The previous value, Re = 2870, put us 2.7% high in Re_b and 3.5% high in
+  # Re_tau (184.3 vs 178.1) -- a genuine Reynolds-number mismatch on top of the
+  # open- vs closed-channel difference. The friction law predicts this change
+  # lands Re_tau near 180.
+  Re: 2792.8       # NOTE: the solver reads this as nu = 1/Re  -> nu = 3.5807e-4
+  Re_tau: 180.0    # diagnostic/target only; delta = Lz for a neumann top wall
+  U_bulk: 1.0      # enforced by the bulk-velocity forcing controller
+  gamma: 1.6       # -> dz1+ = 0.37, dz_max+ = 2.44, 22 cells below z+ = 10
+
+boundary_conditions:
+  top_wall:
+    type: "neumann"   # free-slip / symmetry: open channel
+
+initialization:
+  # EXTENSION of the completed 200 t.u. window. Continues both the field and the
+  # statistics accumulation -- nothing is discarded, the sample count keeps
+  # rising, and the run can be stopped at any checkpoint.
+  # CONTINUATION at the new nu, from the converged Re_b = 2870 field.
+  #
+  # Restart (not interpolate): same grid, same box, so the field transfers
+  # exactly -- only nu changes. Starting from fully developed turbulence 2.7%
+  # away in Re_b needs a far shorter transient than a cold start, and avoids
+  # re-running the box-stretch adjustment that the CaNS seed required.
+  #
+  # For a cold start from scratch, use instead:
+  #   type: "interpolate"
+  #   field_file: "examples/re180_open/seed180_cans.npz"
+  type: "parabolic"                 # ignored: field_file makes this a restart
+  field_file: "results_re180_open/fields.npz"
+  reset_time: false                 # continue the clock from t = 250
+
+solver:
+  type: "fft"
+
+time:
+  dt: 0.005
+  n_steps: 2000000000
+  t_max: 1000.0            # extend the averaging window from 200 to 950 t.u.
+                           # (16 -> ~76 washouts). Deviation from the exact
+                           # total stress should fall ~1/sqrt(N): 0.0089 -> ~0.004.
+  CFL_target: 0.28
+  dt_update_interval: 10
+  dt_max: 0.015
+  dt_min: 0.0001
+  scheme: "IMEX"
+
+compute:
+  device: "auto"
+
+output:
+  results_folder: results_re180_open
+  n_out: 200
+  n_save: 4000
+
+statistics:
+  # NOTE: the enable switch is n_stats > 0. There is no 'enabled' key.
+  n_stats: 25        # ~2300 samples over the 200 t.u. averaging window
+  t_stats: 0.0       # the flow is already equilibrated (no Re_tau drift over the
+                     # previous window), so collect from the first step. No
+                     # further transient is needed -- only more samples.
+  restart_state_file: "results_re180_open/turbulence_stats_state.npz"
+  output_file: "turbulence_stats.npz"
+  state_file: "turbulence_stats_state.npz"
+
+  # Use the multi-plane spectra mode (PHYSICAL heights), NOT z_plus_target.
+  # The legacy z_plus_target path hard-codes delta = Lz/2 and averages a
+  # "bottom wall" and "top wall" plane -- both wrong for an open channel, where
+  # delta = Lz and there is no top wall. With z_plus_target: 15.0 it actually
+  # selects z+ = 7.4 and pairs it with a plane at the free surface.
+  # z+ = 15 at Re_tau = 180 with delta = 1  ->  z = 15/180 = 0.0833
+  spectra_z: [0.0833, 0.25, 0.5]
