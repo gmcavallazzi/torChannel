@@ -1,0 +1,74 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: pytest (CPU, Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install (CPU-only torch)
+        run: |
+          python -m pip install --upgrade pip
+          # The CPU wheel index keeps the runner image small and avoids pulling
+          # the full CUDA stack, which is not usable on a GitHub runner anyway.
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -e ".[test,plot]"
+
+      - name: Show environment
+        run: python -c "import torch, torchannel; print('torch', torch.__version__, '| torchannel', torchannel.__version__)"
+
+      - name: Run tests
+        # PYTORCH_JIT=0 matches the documented run configuration; the
+        # @torch.jit.script decorators become passthroughs.
+        env:
+          PYTORCH_JIT: "0"
+        run: pytest -v -m "not gpu"
+
+      - name: Smoke-test the console entry point
+        run: |
+          torchannel-run --help
+          # Must fail cleanly on a missing config rather than tracebacking.
+          ! torchannel-run /nonexistent.yaml
+
+  import-check:
+    name: back-compat shims
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: |
+          python -m pip install --upgrade pip
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -e ".[test]"
+      - name: Top-level shims still resolve to the package
+        env:
+          PYTORCH_JIT: "0"
+        run: |
+          python - <<'PY'
+          import solver, operators, utils, turbstats, canopy
+          import initflow, projection, projection_fft, tridiag
+          import torchannel.solver
+          from solver import ChannelFlow
+          assert solver is torchannel.solver, "shim created a duplicate module"
+          print("shims OK:", ChannelFlow.__name__)
+          PY
