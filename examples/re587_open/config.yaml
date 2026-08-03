@@ -1,5 +1,5 @@
 # ==============================================================================
-# Re_tau = 550 OPEN CHANNEL -- torChannel validation case
+# Re_tau ~ 587 OPEN CHANNEL -- torChannel validation case
 # ==============================================================================
 # Open channel: no-slip bottom wall, free-slip (symmetry) top. delta = Lz = 1.
 #
@@ -45,12 +45,13 @@ flow:
   #   mkm590      587.19   18.6539     10953.4          2pi x pi   <- matches THIS box
   #   lm550       543.50   18.3883      9994.0          8pi x 3pi
   #
-  # These are NOT interchangeable and the choice changes what the run is:
-  #   - mkm590 gives a like-for-like comparison (matched Re_b AND matched box),
-  #     but lands at Re_tau ~ 587, so the case is no longer "Re_tau = 550".
-  #   - lm550 stays near Re_tau ~ 543 but its box is 8pi x 3pi, so the outer
-  #     region is not comparable.
-  # The existing grid resolves either (dx+ = 10.8 at 550, 11.5 at 587).
+  # mkm590 is used here: matched Re_b AND matched box. The consequence is that
+  # the case sits at Re_tau ~ 587 rather than 550 -- hence the directory name.
+  # A matched box and matched Reynolds number is a real comparison; a round
+  # label is not.
+  #
+  # lm550 was the alternative (Re_tau ~ 543, closer to the round number) but its
+  # box is 8pi x 3pi, so the outer region would not be comparable.
   #
   # Note the old placeholder 10000 happened to sit within 0.1% of the lm550
   # target -- coincidence, not a matched value.
@@ -74,13 +75,13 @@ solver:
 time:
   dt: 0.001
   n_steps: 2000000000
-  t_max: 150.0             # 40 t.u. transient + 110 t.u. statistics (~6.5 eddy
+  t_max: 300.0             # 80 t.u. transient + 220 t.u. statistics (~13 eddy
                            # turnovers; delta/u_tau = 17.0 at Re_tau 587).
-                           # NOTE this is a deliberately short averaging window:
-                           # the mean profile converges quickly but the u'u' peak
-                           # and the spectra will still carry visible scatter.
-                           # Extend by restarting with restart_state_file if the
-                           # figures need it.
+                           # Kept at full length on purpose: a higher Reynolds
+                           # number needs MORE averaging, not less -- the energy
+                           # spreads over a wider range of scales, so the u'u'
+                           # peak and the 2D spectra converge more slowly than at
+                           # Re_tau 180.
   CFL_target: 0.28
   dt_update_interval: 10
   dt_max: 0.004
@@ -95,13 +96,13 @@ compute:
                            # new precision path.
 
 output:
-  results_folder: results_re550_open
+  results_folder: results_re587_open
   n_out: 500
   n_save: 10000
 
 statistics:
-  n_stats: 50        # ~2000 samples over the 110 t.u. averaging window
-  t_stats: 40.0      # after the Re_tau 180 -> 587 transient
+  n_stats: 100       # ~2000 samples over the 220 t.u. averaging window
+  t_stats: 80.0      # after the Re_tau 180 -> 587 transient
   output_file: "turbulence_stats.npz"
   state_file: "turbulence_stats_state.npz"
 
