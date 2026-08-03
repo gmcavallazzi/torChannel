@@ -200,6 +200,34 @@ def reconstruct_grid_from_config(config_file, nx, ny, nz):
     return z_c, kx, ky
 
 
+def _add_plane_mean_variance(data, n_samples, U_mean, uu, vv, ww, uw):
+    """Convert stresses about the instantaneous plane mean into Reynolds stresses.
+
+        <(u - <U>)^2> = <(u - U(t))^2> + var_t(U(z))
+
+    The cross term vanishes because the plane average of u - U(t) is zero by
+    construction. Returns the four stresses corrected in place of the inputs.
+
+    State files written before this correction existed lack the accumulators; the
+    profiles are then returned unchanged, with a warning, because the missing
+    variance genuinely cannot be reconstructed after the fact.
+    """
+    if 'Usq_sum' not in data.files:
+        print("  WARNING: state file predates the plane-mean-unsteadiness correction;\n"
+              "           u'u' and v'v' are biased LOW by var_t(U(z)) and cannot be\n"
+              "           corrected retroactively. Re-run to get Reynolds stresses.")
+        return uu, vv, ww, uw
+
+    import numpy as _np
+    V_mean = data['V_sum'] / n_samples
+    W_mean = data['W_sum'] / n_samples
+    uu = uu + _np.maximum(data['Usq_sum'] / n_samples - U_mean ** 2, 0.0)
+    vv = vv + _np.maximum(data['Vsq_sum'] / n_samples - V_mean ** 2, 0.0)
+    ww = ww + _np.maximum(data['Wsq_sum'] / n_samples - W_mean ** 2, 0.0)
+    uw = uw + (data['UW_sum'] / n_samples - U_mean * W_mean)
+    return uu, vv, ww, uw
+
+
 #: Reference datasets bundled with the package (see scripts/fetch_reference_data.py).
 REFERENCE_DATASETS = {
     'mkm180': 'Moser et al. (1999), $Re_\\tau=178$',
@@ -674,7 +702,18 @@ def main():
         vv_mean = data['vv_sum'] / n_samples
         ww_mean = data['ww_sum'] / n_samples
         uw_mean = data['uw_sum'] / n_samples
-        
+
+        # The stresses are accumulated about the INSTANTANEOUS plane mean, so the
+        # variance of that plane mean over time has to be added back to recover a
+        # Reynolds stress (see torchannel/turbstats.py). It affects u'u' and v'v'
+        # only: continuity plus periodicity pin the plane mean of w to zero, so
+        # w'w' and <u'w'> are unchanged unless a wall velocity is imposed. This
+        # must match finalize_statistics() exactly, or checkpoint figures and
+        # final figures would disagree.
+        uu_mean, vv_mean, ww_mean, uw_mean = _add_plane_mean_variance(
+            data, n_samples, U_mean, uu_mean, vv_mean, ww_mean, uw_mean)
+
+
         # Load 2D spectra sums and compute means
         E_uu_2d = data['E_uu_2d_sum'] / n_samples
         E_vv_2d = data['E_vv_2d_sum'] / n_samples

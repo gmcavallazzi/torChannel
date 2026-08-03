@@ -34,7 +34,8 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from plot_statistics import compute_dUdz, load_reference   # noqa: E402
+from plot_statistics import (compute_dUdz, load_reference,   # noqa: E402
+                             _add_plane_mean_variance)
 
 
 def _metrics(state_path, nu, open_channel):
@@ -49,8 +50,12 @@ def _metrics(state_path, nu, open_channel):
 
     U = d["U_sum"] / n
     uu = d["uu_sum"] / n
+    vv = d["vv_sum"] / n
     ww = d["ww_sum"] / n
     uw = d["uw_sum"] / n
+    # Same correction the figures apply, so the logged numbers and the plots
+    # cannot drift apart.
+    uu, vv, ww, uw = _add_plane_mean_variance(d, n, U, uu, vv, ww, uw)
 
     dUdz, dUdz_wall, _ = compute_dUdz(U, z, Lz, open_channel=open_channel)
     u_tau = float(np.sqrt(nu * abs(dUdz_wall)))

@@ -41,13 +41,13 @@ boundary_conditions:
     type: "dirichlet"   # no-slip: closed channel
 
 initialization:
-  # Restarted from the field left by the pre-47fe834 run. That run carried the
-  # advection index bug (one x-plane and one y-plane never advected, a spurious
-  # +0.57% streamwise momentum source), so its STATISTICS are discarded -- but
-  # the field itself is a perfectly good fully-developed closed-channel state at
-  # the right Re_b, which saves re-running the 100 t.u. spin-up from the
-  # mirrored seed. The 100 t.u. transient below re-equilibrates it to the
-  # corrected operator before any sample is taken.
+  # Continues from t = 249.7 of the previous run, which had already spent 100
+  # t.u. equilibrating to the corrected advection operator (47fe834) and then
+  # collected 150 samples. The FIELD is fully developed and stays; only the
+  # STATISTICS are discarded, because they were accumulated about the
+  # instantaneous plane mean and so under-report u'u' and v'v' (see
+  # torchannel/turbstats.py). No spin-up is needed: nothing about the solver
+  # changed, only what is recorded.
   #
   # To rebuild from scratch instead, point field_file at
   # examples/re180_closed/seed_full180.npz, produced by
@@ -56,7 +56,7 @@ initialization:
   # Navier-Stokes, so a cleanly mirrored field sits on an invariant manifold and
   # would stay symmetric indefinitely).
   type: "parabolic"                 # ignored: field_file makes this a restart
-  field_file: "results_re180_closed_prebugfix/fields.npz"
+  field_file: "results_re180_closed_run332/fields.npz"
   reset_time: true
 
 solver:
@@ -65,7 +65,7 @@ solver:
 time:
   dt: 0.004
   n_steps: 2000000000
-  t_max: 477.0             # 100 t.u. transient + 377 t.u. (30 washouts) of stats
+  t_max: 379.0             # 2 t.u. restart settle + 377 t.u. (30 washouts) of stats
   CFL_target: 0.4          # raised from 0.28; AB2 advection is stable here but
                            # this leaves less margin -- watch max|div| and dt
   dt_update_interval: 10
@@ -79,7 +79,10 @@ compute:
 output:
   results_folder: results_re180_closed
   n_out: 500
-  n_save: 10000
+  # 5000, not 10000: the statistics checkpoint is only written alongside
+  # fields.npz, so this is what sets how often convergence can be re-logged.
+  # A 310 MB field write every ~9 min is a rounding error against the step cost.
+  n_save: 5000
 
 statistics:
   # RAISED from 25. The integral timescale of u_tau is ~10 t.u., so sampling
@@ -87,9 +90,12 @@ statistics:
   # redundant. At 200 steps (~1.06 t.u.) there are still ~9 per correlation
   # time, which is ample, and the 2D spectra cost drops 8-fold.
   n_stats: 200
-  t_stats: 100.0     # centreline-spanning structures must grow from scratch;
-                     # the mirror provides two decorrelated halves but no
-                     # motions that cross the centreline. ~6 eddy turnovers.
+  # NO SPIN-UP: the field continues from a fully-developed state on the same
+  # grid with the same operator, so there is nothing to equilibrate. The 2 t.u.
+  # is only the restart settle -- the AB2 history buffer starts empty (first
+  # step is Euler) and the bulk-velocity controller re-acquires. Measured: both
+  # are done inside ~250 steps, so 2 t.u. is already generous.
+  t_stats: 2.0
   output_file: "turbulence_stats.npz"
   state_file: "turbulence_stats_state.npz"
 

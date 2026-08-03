@@ -264,6 +264,58 @@ def test_fused_imex_kernel_matches_separate_operators():
         assert err < 1e-12, f"fused and separate {name}-RHS disagree by {err:.3e}"
 
 
+def test_reynolds_stress_includes_plane_mean_unsteadiness():
+    """u'u' must be taken about the TIME mean, not the instantaneous plane mean.
+
+    The accumulator forms fluctuations about U(z,t), so the variance of U(z,t)
+    itself has to be added back:
+
+        <(u - <U>)^2> = <(u - U(t))^2> + var_t(U(z))
+
+    Omitting it biases u'u' low, and does so invisibly: continuity plus
+    periodicity pin the plane mean of w to zero, so w'w' and <u'w'> are exactly
+    unaffected and the error masquerades as numerical dissipation acting on the
+    streamwise component alone.
+
+    Constructed here with a KNOWN answer: a field whose plane mean oscillates by
+    a prescribed amount on top of a fixed fluctuation pattern.
+    """
+    from torchannel.turbstats import TurbulenceStats
+
+    nx = ny = 8
+    nz, Lz, nu = 16, 1.0, 1e-3
+    z_f, z_c, dz_f, dz_c = generate_grid(1.6, nz, Lz, stretching_type="bottom")
+    stats = TurbulenceStats(nx, ny, nz, 1.0, 1.0, Lz, z_c, z_f, dz_c, dz_f,
+                            1.0, 1.0, nu, Re_tau_target=180.0, device="cpu",
+                            top_wall_bc_type="dirichlet")
+
+    # x-uniform, so the face->centre interpolation in x is the identity and the
+    # expected value stays independent of the code's own stencils.
+    torch.manual_seed(7)
+    pattern = torch.randn(ny, nz)
+    pattern -= pattern.mean(dim=0, keepdim=True)           # zero plane mean
+    offsets = [0.3, -0.3, 0.3, -0.3]                       # var_t(U) = 0.09 exactly
+
+    for off in offsets:
+        u = torch.zeros(nx + 1, ny + 2, nz + 2)
+        v = torch.zeros(nx + 2, ny + 1, nz + 2)
+        w = torch.zeros(nx + 2, ny + 2, nz + 1)
+        u[:, 1:ny + 1, 1:nz + 1] = pattern + off
+        stats.accumulate_statistics(u, v, w, u_tau_current=1.0)
+
+    out = stats.finalize_statistics()
+    uu = out["uu_mean"]
+    expected = pattern.var(dim=0, unbiased=False).numpy() + 0.09
+
+    assert np.allclose(uu, expected, rtol=1e-10), (
+        "u'u' is missing the plane-mean variance: "
+        f"got {uu[nz // 2]:.6f}, expected {expected[nz // 2]:.6f}")
+    # And the raw accumulator alone must NOT match -- otherwise the test proves
+    # nothing about the correction actually being applied.
+    raw = (stats.uu_sum / stats.n_samples).numpy()
+    assert not np.allclose(raw, expected, rtol=1e-3)
+
+
 # --------------------------------------------------------------------------
 # Statistics: open- vs closed-channel u_tau
 # --------------------------------------------------------------------------

@@ -103,6 +103,29 @@ class TurbulenceStats:
         self.ww_sum = torch.zeros(nz, device=device, dtype=torch.float64)
         self.uw_sum = torch.zeros(nz, device=device, dtype=torch.float64)
 
+        # PLANE-MEAN UNSTEADINESS. The stresses above are accumulated about the
+        # INSTANTANEOUS plane mean U(z,t), but a Reynolds stress is defined about
+        # the TIME mean <U>(z). The two differ by exactly the variance of the
+        # plane mean, because the cross term vanishes on averaging over x,y:
+        #
+        #   <(u - <U>)^2> = <(u - U(t))^2> + <(U(t) - <U>)^2>
+        #
+        # Dropping the second term biases u'u' LOW. It is invisible in w'w' and
+        # <u'w'>, because continuity plus periodicity pin the plane mean of w to
+        # zero identically (verified: |W(z)| < 4e-16) -- which is precisely why
+        # the error showed up as a u'_rms deficit with the shear stress intact,
+        # and looked like numerical dissipation.
+        #
+        # These are (nz,) each, so capturing them costs nothing. W and the UW
+        # covariance are kept for the cases where W is NOT zero: wall blowing or
+        # suction (control.py) breaks that guarantee.
+        self.Usq_sum = torch.zeros(nz, device=device, dtype=torch.float64)
+        self.Vsq_sum = torch.zeros(nz, device=device, dtype=torch.float64)
+        self.Wsq_sum = torch.zeros(nz, device=device, dtype=torch.float64)
+        self.UW_sum = torch.zeros(nz, device=device, dtype=torch.float64)
+        self.V_sum = torch.zeros(nz, device=device, dtype=torch.float64)
+        self.W_sum = torch.zeros(nz, device=device, dtype=torch.float64)
+
 
         # Third central moments (skewness) and canopy drag profile accumulators
         self.uuu_sum = torch.zeros(nz, device=device, dtype=torch.float64)
@@ -226,6 +249,15 @@ class TurbulenceStats:
         self.ww_sum += ww
         self.uw_sum += uw
 
+        # Plane means and their second moments, for the correction above.
+        U64, V64, W64 = U.to(A), V.to(A), W.to(A)
+        self.V_sum += V64
+        self.W_sum += W64
+        self.Usq_sum += U64 * U64
+        self.Vsq_sum += V64 * V64
+        self.Wsq_sum += W64 * W64
+        self.UW_sum += U64 * W64
+
         # Third central moments (skewness numerators)
         self.uuu_sum += torch.mean(u_fluct ** 3, dim=(0, 1)).to(A)
         self.www_sum += torch.mean(w_fluct ** 3, dim=(0, 1)).to(A)
@@ -337,11 +369,35 @@ class TurbulenceStats:
         print(f"\nFinalizing statistics from {self.n_samples} samples...", flush=True)
 
         # Compute averages on GPU first (keep as tensors)
-        U_mean_gpu = self.U_sum / self.n_samples
-        uu_mean_gpu = self.uu_sum / self.n_samples
-        vv_mean_gpu = self.vv_sum / self.n_samples
-        ww_mean_gpu = self.ww_sum / self.n_samples
-        uw_mean_gpu = self.uw_sum / self.n_samples
+        n = self.n_samples
+        U_mean_gpu = self.U_sum / n
+        V_mean_gpu = self.V_sum / n
+        W_mean_gpu = self.W_sum / n
+
+        # Restore the plane-mean unsteadiness dropped by accumulating about the
+        # instantaneous plane mean (see the accumulator definitions). Clamped at
+        # zero: these are variances, and with few samples round-off can make the
+        # difference of two nearly equal numbers marginally negative.
+        var_U = torch.clamp(self.Usq_sum / n - U_mean_gpu ** 2, min=0.0)
+        var_V = torch.clamp(self.Vsq_sum / n - V_mean_gpu ** 2, min=0.0)
+        var_W = torch.clamp(self.Wsq_sum / n - W_mean_gpu ** 2, min=0.0)
+        cov_UW = self.UW_sum / n - U_mean_gpu * W_mean_gpu
+
+        uu_mean_gpu = self.uu_sum / n + var_U
+        vv_mean_gpu = self.vv_sum / n + var_V
+        ww_mean_gpu = self.ww_sum / n + var_W
+        uw_mean_gpu = self.uw_sum / n + cov_UW
+
+        # Report the size of the correction: it is the difference between a
+        # Reynolds stress and a stress about the instantaneous mean, and it is
+        # worth knowing whether it is 0.1% or 5%.
+        _raw = self.uu_sum / n
+        _peak = float(_raw.max())
+        if _peak > 0:
+            _k = int(torch.argmax(_raw))
+            _rel = 100.0 * (float(uu_mean_gpu[_k]) / _peak - 1.0)
+            print(f"  plane-mean unsteadiness adds {_rel:+.2f}% to peak u'u' "
+                  f"({_rel / 2:+.2f}% on u'_rms)", flush=True)
 
         E_uu_2d_gpu = self.E_uu_2d_sum / self.n_samples
         E_vv_2d_gpu = self.E_vv_2d_sum / self.n_samples
@@ -472,6 +528,13 @@ class TurbulenceStats:
             'vv_sum': np.asarray(self.vv_sum.detach().cpu().numpy()),
             'ww_sum': np.asarray(self.ww_sum.detach().cpu().numpy()),
             'uw_sum': np.asarray(self.uw_sum.detach().cpu().numpy()),
+            # Plane-mean unsteadiness (see the accumulator definitions)
+            'V_sum': np.asarray(self.V_sum.detach().cpu().numpy()),
+            'W_sum': np.asarray(self.W_sum.detach().cpu().numpy()),
+            'Usq_sum': np.asarray(self.Usq_sum.detach().cpu().numpy()),
+            'Vsq_sum': np.asarray(self.Vsq_sum.detach().cpu().numpy()),
+            'Wsq_sum': np.asarray(self.Wsq_sum.detach().cpu().numpy()),
+            'UW_sum': np.asarray(self.UW_sum.detach().cpu().numpy()),
             'uuu_sum': np.asarray(self.uuu_sum.detach().cpu().numpy()),
             'www_sum': np.asarray(self.www_sum.detach().cpu().numpy()),
             'fx_profile_sum': np.asarray(self.fx_profile_sum.detach().cpu().numpy()),
@@ -538,12 +601,23 @@ class TurbulenceStats:
         self.E_uw_2d_sum = torch.tensor(data['E_uw_2d_sum'], device=self.device)
 
         # Newer accumulators: tolerate their absence in old state files
-        for key, attr in (('uuu_sum', 'uuu_sum'), ('www_sum', 'www_sum'),
-                          ('fx_profile_sum', 'fx_profile_sum')):
+        for key in ('uuu_sum', 'www_sum', 'fx_profile_sum',
+                    'V_sum', 'W_sum', 'Usq_sum', 'Vsq_sum', 'Wsq_sum', 'UW_sum'):
             if key in data.files:
-                setattr(self, attr, torch.tensor(data[key], device=self.device))
+                setattr(self, key, torch.tensor(data[key], device=self.device))
             else:
                 print(f"  (old state file: {key} missing, restarting that sum from zero)", flush=True)
+
+        # A state file written before the plane-mean correction existed carries
+        # stresses about the instantaneous mean. Resuming from it would blend two
+        # different definitions -- the restored samples missing the correction,
+        # the new ones carrying it -- and the result would be neither. Say so.
+        if 'Usq_sum' not in data.files and self.n_samples > 0:
+            print("  WARNING: this state predates the plane-mean-unsteadiness correction.\n"
+                  "           u'u' and v'v' in the restored samples are biased low and the\n"
+                  "           correction cannot be reconstructed from them. Continuing will\n"
+                  "           mix two definitions -- start fresh statistics instead.",
+                  flush=True)
 
         # Backward compatibility: ignore dUdz_sum and omega_y_sum if they exist in old files
         # (they are no longer computed or needed)
