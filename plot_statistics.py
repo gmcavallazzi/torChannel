@@ -311,24 +311,36 @@ def plot_mean_velocity(z_c, U_mean, u_tau, nu, ax_outer, ax_inner, ref=None):
 
 
 def plot_reynolds_stresses_normal(z_c, uu, vv, ww, u_tau, nu, ax, ref=None):
-    """Plot normal Reynolds stresses (uu, vv, ww) vs z+."""
+    """Plot the normalised RMS velocity fluctuations vs z+.
+
+    u'_rms/u_tau = sqrt(<u'u'>)/u_tau, not <u'u'>/u_tau^2. The RMS is the more
+    readable form: it is a velocity, directly comparable to U+, and it does not
+    compress the small components against the streamwise one the way the squared
+    quantity does.
+
+    The accumulated variances can go marginally negative at the wall through
+    round-off, so they are clipped at zero before the square root.
+    """
     z_plus = compute_wall_coordinates(z_c, u_tau, nu)
 
-    ax.plot(z_plus, uu / u_tau**2, 'r-', linewidth=1.5, label=r"$\langle u'u' \rangle^+$")
-    ax.plot(z_plus, vv / u_tau**2, 'g-', linewidth=1.5, label=r"$\langle v'v' \rangle^+$")
-    ax.plot(z_plus, ww / u_tau**2, 'b-', linewidth=1.5, label=r"$\langle w'w' \rangle^+$")
+    rms = lambda q: np.sqrt(np.maximum(q, 0.0)) / u_tau
+    ax.plot(z_plus, rms(uu), 'r-', linewidth=1.5, label=r"$u'_{\mathrm{rms}}/u_\tau$")
+    ax.plot(z_plus, rms(vv), 'g-', linewidth=1.5, label=r"$v'_{\mathrm{rms}}/u_\tau$")
+    ax.plot(z_plus, rms(ww), 'b-', linewidth=1.5, label=r"$w'_{\mathrm{rms}}/u_\tau$")
 
     if ref is not None:
-        # Same colour per component, open symbols, so the pairing is obvious.
+        # The reference ships variances (<q'q'>/u_tau^2), so take the root here
+        # too rather than plotting two different quantities on one axis.
         for key, colour in (('uu_plus', 'r'), ('vv_plus', 'g'), ('ww_plus', 'b')):
-            ax.plot(ref['z_plus'], ref[key], 'o', color=colour, markersize=3,
-                    markerfacecolor='none', markevery=2, linewidth=0)
+            ax.plot(ref['z_plus'], np.sqrt(np.maximum(ref[key], 0.0)), 'o',
+                    color=colour, markersize=3, markerfacecolor='none',
+                    markevery=2, linewidth=0)
         # One legend entry for all three reference series.
         ax.plot([], [], 'o', color='0.35', markersize=3, markerfacecolor='none',
                 linewidth=0, label=ref['label'])
 
     ax.set_xlabel(r'$z^+$')
-    ax.set_ylabel(r'Reynolds stress$^+$')
+    ax.set_ylabel(r"$q'_{\mathrm{rms}}/u_\tau$")
     ax.set_xlim([0, _xmax(z_plus, ref)])
     ax.grid(True, alpha=0.3)
     ax.legend(fontsize=7)
@@ -877,7 +889,7 @@ def main():
     ax_stresses = fig2.add_subplot(111)
 
     plot_reynolds_stresses_normal(z_c, uu_mean, vv_mean, ww_mean, u_tau, nu, ax_stresses, ref=ref)
-    fig2.suptitle('Normal Reynolds Stresses', fontsize=12)
+    fig2.suptitle('RMS Velocity Fluctuations', fontsize=12)
     if canopy_h is not None:
         ax_stresses.axvline(canopy_h * u_tau / nu, color='gray', linestyle='--', linewidth=1, alpha=0.8)
 
