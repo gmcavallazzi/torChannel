@@ -1,0 +1,93 @@
+# ==============================================================================
+# Re_tau = 180 CLOSED CHANNEL -- HALVED TIMESTEP. Single-variable dt experiment.
+# ==============================================================================
+# Identical to config.yaml in EVERY respect except CFL_target: 0.4 -> 0.2, and
+# n_stats doubled so the physical sampling interval is unchanged. Same seed
+# field, same grid, same nu, same box.
+#
+# THE QUESTION. With the statistics defects fixed (47fe834, dba864e, 3752aac),
+# u'_rms in the log layer is still ~4% below MKM while <u'w'>, U and the total
+# stress balance are all correct. Measured directly from a raw field, so it is
+# the FIELD that carries less streamwise energy, not the post-processing.
+#
+# THE HYPOTHESIS. torChannel uses Chorin's NON-INCREMENTAL projection: step_imex
+# builds rhs = diff_xy - adv + forcing with no grad p, then solves for the FULL
+# pressure and projects. CaNS -- which reproduces KMM -- instead carries the
+# pressure gradient in the momentum update (rk.f90:184), solves for a pressure
+# CORRECTION, and accumulates p = p + pp (updatep.f90). That is the incremental
+# scheme, second order in time; ours is first order, and it imposes homogeneous
+# Neumann on the FULL pressure at the walls where the true condition is
+# dp/dz = nu d2w/dz2 != 0. The resulting error lives in a sqrt(nu*dt) wall layer
+# and contaminates the WALL-PARALLEL momentum -- which would show in u' and v'
+# while leaving <u'w'> and U untouched, both being pinned by the total-stress
+# balance regardless.
+#
+# THE TEST. That error is O(dt) and nothing else in the solver is dt-sensitive
+# at this level (advection and diffusion are both second order in time, and the
+# spatial discretisation is untouched). So:
+#
+#     deficit halves, -4.0% -> ~-2%   =>  time-splitting error, fix the scheme
+#     deficit unchanged                =>  not the time integration; look elsewhere
+#
+# COST: ~2x the steps per t.u., but the band-averaged deficit settles fast (it
+# read -3.97, -3.99, -4.10 at n = 23, 48, 73 in job 337), so ~85 t.u. suffices.
+# ------------------------------------------------------------------------------
+
+grid:
+  nx: 192
+  ny: 192
+  nz: 256
+
+domain:
+  Lx: 12.566370614359172   # 4*pi
+  Ly: 6.283185307179586    # 2*pi
+  Lz: 2.0
+  stretching_type: "symmetric"
+
+flow:
+  Re: 2792.8
+  Re_tau: 180.0
+  U_bulk: 1.0
+  gamma: 1.6
+
+boundary_conditions:
+  top_wall:
+    type: "dirichlet"
+
+initialization:
+  # The same field job 337 was running, at its last checkpoint. Nothing about
+  # the solver changes, so no spin-up is needed beyond letting dt settle.
+  type: "parabolic"
+  field_file: "results_re180_closed_run337/fields.npz"
+  reset_time: true
+
+solver:
+  type: "fft"
+
+time:
+  dt: 0.002
+  n_steps: 2000000000
+  t_max: 90.0              # 5 t.u. settle + 85 t.u. of statistics
+  CFL_target: 0.2          # <-- THE ONLY PHYSICS-RELEVANT CHANGE (was 0.4)
+  dt_update_interval: 10
+  dt_max: 0.02
+  dt_min: 0.0001
+  scheme: "IMEX"
+
+compute:
+  device: "auto"
+
+output:
+  results_folder: results_re180_cfl02
+  n_out: 500
+  n_save: 5000
+
+statistics:
+  # 400, not 200: dt is halved, so this keeps the PHYSICAL sampling interval and
+  # the samples-per-t.u. identical to the control. Sampling interval does not
+  # bias a mean, but matching it keeps the noise levels comparable.
+  n_stats: 400
+  t_stats: 5.0             # only to let the CFL controller settle to the new dt
+  output_file: "turbulence_stats.npz"
+  state_file: "turbulence_stats_state.npz"
+  spectra_z: [0.0833, 0.25, 1.0]
