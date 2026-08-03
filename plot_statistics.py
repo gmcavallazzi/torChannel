@@ -353,7 +353,7 @@ def plot_shear_vorticity(z_c, uw, dUdz, u_tau, nu, ax_uw, ax_omega, ref=None):
     ax_omega.grid(True, alpha=0.3)
 
 
-def plot_total_stress_decomposition(z_c, uw, dUdz, u_tau, nu, ax):
+def plot_total_stress_decomposition(z_c, uw, dUdz, u_tau, nu, ax, delta=None):
     """
     Plot total stress with decomposition into Reynolds stress and viscous stress components.
 
@@ -385,9 +385,33 @@ def plot_total_stress_decomposition(z_c, uw, dUdz, u_tau, nu, ax):
     ax.plot(z_plus, viscous_stress_plus, color='teal', linewidth=1.2,
             label=r'$\nu \, \mathrm{d}U/\mathrm{d}z^+$ (Viscous)')
 
+    # Exact total stress: 1 - z/delta, a straight line from (0, 1) to
+    # (delta+, 0). Not a fit -- an exact consequence of the mean momentum
+    # equation, so departure from it measures how far the statistics are from
+    # converged, independently of any reference dataset.
+    #
+    # The line must reach zero at z = delta, NOT at the last plotted point: the
+    # topmost cell is dropped above (its one-sided dU/dz is BC-dependent), so
+    # z_plus.max() falls short of delta+ by a few percent and anchoring there
+    # would tilt the reference and overstate the deviation.
+    delta_plus = (delta * u_tau / nu) if delta is not None else z_plus.max()
+    exact = 1.0 - z_plus / delta_plus
+    ax.plot([0.0, delta_plus], [1.0, 0.0], '--', color='0.45', linewidth=1.2,
+            label=r'$1 - z/\delta$ (exact)')
+
     # Plot total stress with thicker line
     ax.plot(z_plus, total_stress_plus, 'k-', linewidth=2.5,
             label=r'Total stress')
+
+    # Quantify the departure, away from the top boundary where the one-sided
+    # dU/dz is BC-dependent.
+    interior = z_plus < 0.9 * delta_plus
+    if interior.any():
+        err = np.abs(total_stress_plus[interior] - exact[interior])
+        ax.text(0.97, 0.97,
+                rf'max dev. $= {err.max():.3f}$',
+                transform=ax.transAxes, ha='right', va='top', fontsize=8,
+                bbox=dict(boxstyle='round,pad=0.3', fc='white', ec='0.7', alpha=0.85))
 
     ax.set_xlabel(r'$z^+$')
     ax.set_ylabel(r'Stress$^+$')
@@ -819,7 +843,7 @@ def main():
     ax_U_inner = fig1.add_subplot(gs1[0, 1])
 
     plot_mean_velocity(z_c, U_mean, u_tau, nu, ax_U_outer, ax_U_inner, ref=ref)
-    fig1.suptitle(f'Mean Velocity Profile ({n_samples} samples)', fontsize=12)
+    fig1.suptitle('Mean Velocity Profile', fontsize=12)
     if canopy_h is not None:
         # outer plot: U on x, z on y -> horizontal tip line; inner plot: z+ on x
         ax_U_outer.axhline(canopy_h, color='gray', linestyle='--', linewidth=1, alpha=0.8)
@@ -830,7 +854,7 @@ def main():
     ax_stresses = fig2.add_subplot(111)
 
     plot_reynolds_stresses_normal(z_c, uu_mean, vv_mean, ww_mean, u_tau, nu, ax_stresses, ref=ref)
-    fig2.suptitle(f'Normal Reynolds Stresses ({n_samples} samples)', fontsize=12)
+    fig2.suptitle('Normal Reynolds Stresses', fontsize=12)
     if canopy_h is not None:
         ax_stresses.axvline(canopy_h * u_tau / nu, color='gray', linestyle='--', linewidth=1, alpha=0.8)
 
@@ -842,7 +866,7 @@ def main():
     ax_omega = fig3.add_subplot(gs3[0, 1])
 
     plot_shear_vorticity(z_c, uw_mean, dUdz_mean, u_tau, nu, ax_uw, ax_omega, ref=ref)
-    fig3.suptitle(f'Shear Stress and Mean Velocity Gradient ({n_samples} samples)', fontsize=12)
+    fig3.suptitle('Shear Stress and Mean Velocity Gradient', fontsize=12)
     if canopy_h is not None:
         ax_uw.axvline(canopy_h * u_tau / nu, color='gray', linestyle='--', linewidth=1, alpha=0.8)
         ax_omega.axvline(canopy_h * u_tau / nu, color='gray', linestyle='--', linewidth=1, alpha=0.8)
@@ -864,7 +888,7 @@ def main():
             plot_2d_spectra_wavelength(kx, ky, premult_uu[i], premult_vv[i],
                                        premult_ww[i], premult_uw[i],
                                        axs[0], axs[1], axs[2], axs[3], u_tau, nu)
-            figS.suptitle(f'2D Premultiplied Spectra at $z = {z_pl:.3f}$ ({n_samples} samples)',
+            figS.suptitle(f'2D Premultiplied Spectra at $z = {z_pl:.3f}$',
                           fontsize=12)
             spectra_figs.append((figS, f"spectra_2d_z{z_pl:.3f}"))
         fig4 = None
@@ -880,14 +904,14 @@ def main():
         plot_2d_spectra_wavelength(kx, ky, premult_uu, premult_vv, premult_ww, premult_uw,
                                    ax_premult_uu, ax_premult_vv, ax_premult_ww, ax_premult_uw,
                                    u_tau, nu)
-        fig4.suptitle(f'2D Premultiplied Spectra at $z^+ \\approx 15$ ({n_samples} samples)', fontsize=12)
+        fig4.suptitle('2D Premultiplied Spectra at $z^+ \\approx 15$', fontsize=12)
 
     # Figure 5: Total stress decomposition (1:1 aspect ratio)
     fig5 = plt.figure(figsize=(6, 6))
     ax_total = fig5.add_subplot(111)
 
-    plot_total_stress_decomposition(z_c, uw_mean, dUdz_mean, u_tau, nu, ax_total)
-    fig5.suptitle(f'Total Stress Decomposition ({n_samples} samples)', fontsize=12)
+    plot_total_stress_decomposition(z_c, uw_mean, dUdz_mean, u_tau, nu, ax_total, delta=delta)
+    fig5.suptitle('Total Stress Decomposition', fontsize=12)
     if canopy_h is not None:
         ax_total.axvline(canopy_h * u_tau / nu, color='gray', linestyle='--', linewidth=1, alpha=0.8)
 
@@ -910,7 +934,7 @@ def main():
         ax6.set_ylabel(r'$z$')
         ax6.legend()
         ax6.grid(alpha=0.3)
-        fig6.suptitle(f'Velocity Skewness ({n_samples} samples)', fontsize=12)
+        fig6.suptitle('Velocity Skewness', fontsize=12)
 
     # Figure 7: canopy drag force density profile
     fig7 = None
@@ -928,7 +952,7 @@ def main():
         ax7.set_xlabel(r'$-\langle f_x \rangle$ (drag density)')
         ax7.set_ylabel(r'$z$')
         ax7.grid(alpha=0.3)
-        fig7.suptitle(f'Canopy Drag Profile ({n_samples} samples)', fontsize=12)
+        fig7.suptitle('Canopy Drag Profile', fontsize=12)
 
     # Save figures
     formats = ['pdf', 'png'] if args.format == 'both' else [args.format]
