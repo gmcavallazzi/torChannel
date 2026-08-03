@@ -1,12 +1,20 @@
-# TorChannel Requirements
-# GPU-accelerated DNS for turbulent channel flow
+# torChannel requirements
+#
+# Prefer `pip install -e .` (or `pip install -e ".[dev]"`), which reads
+# pyproject.toml. This file is kept for environments that expect it.
 
-# Core dependencies
+# Core: needed to run a simulation
 torch>=1.10.0
 numpy>=1.20.0
-matplotlib>=3.3.0
 pyyaml>=5.4.0
 
-# Optional: For better plotting
-# Uncomment if you have LaTeX installed
-# latex
+# Post-processing and figures -- `pip install -e ".[plot]"`
+# scipy is required by post_process.py and compute_gamma_from_grid.py;
+# scikit-image by visualize_structures.py (Q-criterion isosurfaces).
+# Both were undeclared before.
+matplotlib>=3.3.0
+scipy>=1.7.0
+scikit-image>=0.19.0
+
+# Tests -- `pip install -e ".[test]"`
+pytest>=7.0

@@ -1,0 +1,73 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "torchannel"
+version = "0.1.0"
+description = "GPU-accelerated DNS for incompressible turbulent channel flow, written in PyTorch"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.9"
+authors = [{ name = "Giorgio Cavallazzi" }]
+keywords = [
+    "computational-fluid-dynamics",
+    "direct-numerical-simulation",
+    "turbulence",
+    "channel-flow",
+    "immersed-boundary",
+    "pytorch",
+    "gpu",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Physics",
+]
+
+dependencies = [
+    "torch>=1.10.0",
+    "numpy>=1.20.0",
+    "pyyaml>=5.4.0",
+]
+
+[project.optional-dependencies]
+# Post-processing and figures. scipy is required by post_process.py and
+# compute_gamma_from_grid.py; scikit-image by visualize_structures.py. Both were
+# undeclared before this file existed.
+plot = [
+    "matplotlib>=3.3.0",
+    "scipy>=1.7.0",
+    "scikit-image>=0.19.0",
+]
+test = ["pytest>=7.0"]
+dev = ["torchannel[plot,test]"]
+
+[project.urls]
+Homepage = "https://github.com/gmcavallazzi/torChannel"
+Repository = "https://github.com/gmcavallazzi/torChannel"
+
+[project.scripts]
+torchannel-run = "torchannel.cli:run"
+torchannel-stats = "torchannel.cli:stats"
+
+[tool.setuptools]
+# Only the package ships. The top-level *.py files are back-compat shims and
+# standalone utility scripts for in-repo use; they must not land in site-packages
+# under generic names like `solver` or `utils`.
+packages = ["torchannel"]
+
+[tool.setuptools.package-data]
+torchannel = ["data/reference/*.csv"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# The historical suite is a set of standalone print-based scripts; only files
+# matching this pattern are collected as real assertions.
+python_files = ["test_regression*.py", "test_precision*.py"]
+markers = [
+    "gpu: requires a CUDA device (deselect with -m 'not gpu')",
+    "slow: takes more than ~30 s",
+]
