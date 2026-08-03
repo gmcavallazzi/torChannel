@@ -334,13 +334,19 @@ def plot_reynolds_stresses_normal(z_c, uu, vv, ww, u_tau, nu, ax, ref=None):
     ax.legend(fontsize=7)
 
 
-def plot_shear_vorticity(z_c, uw, dUdz, u_tau, nu, ax_uw, ax_omega, ref=None):
+def plot_shear_vorticity(z_c, uw, dUdz, u_tau, nu, ax_uw, ax_omega, ref=None,
+                         delta=None):
     """Plot shear stress and mean vorticity (dU/dz) in square subplots.
 
-    The last (topmost) point is dropped: the one-sided dU/dz there depends on
-    the top boundary condition (e.g. free-slip) and is not meaningful."""
-    z_c, uw, dUdz = z_c[:-1], uw[:-1], dUdz[:-1]
+    The topmost point is dropped from dU/dz ONLY: its one-sided difference there
+    depends on the top boundary condition (e.g. free-slip) and is not
+    meaningful. It is NOT dropped from -<u'w'>, which is a perfectly good
+    statistic at the last cell centre -- dropping it there truncated the shear
+    curve short of the free surface, where it should approach zero.
+    """
     z_plus = compute_wall_coordinates(z_c, u_tau, nu)
+    z_plus_g = z_plus[:-1]          # for the BC-dependent gradient only
+    dUdz = dUdz[:-1]
 
     # Shear stress: -<u'w'> / u_tau^2
     if ref is not None:
@@ -350,7 +356,8 @@ def plot_shear_vorticity(z_c, uw, dUdz, u_tau, nu, ax_uw, ax_omega, ref=None):
     ax_uw.plot(z_plus, -uw / u_tau**2, 'k-', linewidth=1.5, label='torChannel')
     ax_uw.set_xlabel(r'$z^+$')
     ax_uw.set_ylabel(r"$-\langle u'w' \rangle^+$")
-    ax_uw.set_xlim([0, _xmax(z_plus, ref)])
+    hi = max(_xmax(z_plus, ref), (delta * u_tau / nu) if delta else 0.0)
+    ax_uw.set_xlim([0, hi])
     ax_uw.grid(True, alpha=0.3)
     if ref is not None:
         ax_uw.legend(fontsize=7)
@@ -358,11 +365,11 @@ def plot_shear_vorticity(z_c, uw, dUdz, u_tau, nu, ax_uw, ax_omega, ref=None):
     # Mean vorticity: omega_y ≈ dU/dz (since dW/dx = 0 statistically)
     # Inner scaling: omega_y * nu / u_tau^2
     omega_y_plus = dUdz * nu / u_tau**2
-    ax_omega.plot(z_plus, omega_y_plus, 'k-', linewidth=1.5)
+    ax_omega.plot(z_plus_g, omega_y_plus, 'k-', linewidth=1.5)
     ax_omega.set_xlabel(r'$z^+$')
     ax_omega.set_ylabel(r'$\mathrm{d}U/\mathrm{d}z^+$')
     # Same range as the shear panel it shares a figure with.
-    ax_omega.set_xlim([0, _xmax(z_plus, ref)])
+    ax_omega.set_xlim([0, hi])
     ax_omega.axhline(0, color='gray', linestyle='--', linewidth=0.5)
     ax_omega.grid(True, alpha=0.3)
 
@@ -881,7 +888,7 @@ def main():
     ax_uw = fig3.add_subplot(gs3[0, 0])
     ax_omega = fig3.add_subplot(gs3[0, 1])
 
-    plot_shear_vorticity(z_c, uw_mean, dUdz_mean, u_tau, nu, ax_uw, ax_omega, ref=ref)
+    plot_shear_vorticity(z_c, uw_mean, dUdz_mean, u_tau, nu, ax_uw, ax_omega, ref=ref, delta=delta)
     fig3.suptitle('Shear Stress and Mean Velocity Gradient', fontsize=12)
     if canopy_h is not None:
         ax_uw.axvline(canopy_h * u_tau / nu, color='gray', linestyle='--', linewidth=1, alpha=0.8)
