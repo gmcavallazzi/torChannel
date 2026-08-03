@@ -813,6 +813,24 @@ def main():
         if open_channel:
             print(f"  Open channel (free-slip top): delta = Lz = {delta:.6f}")
 
+    # --- closed channel: FOLD about the centreline ------------------------
+    # The two halves are statistically identical, so averaging them doubles the
+    # effective sample count at no cost. That matters most for the slowest
+    # quantity in the dataset: the large-scale streamwise energy in the log
+    # layer, which is where the residual disagreement with MKM sits.
+    # This must precede compute_dUdz -- folding <u'w'> while leaving the viscous
+    # term unfolded would make the total-stress balance inconsistent.
+    # <u'w'> is ODD about the centreline; U and the normal stresses are even.
+    if not open_channel and not args.full_channel:
+        _mirror = lambda a: np.interp((2.0 * delta - z_c)[::-1], z_c, a)[::-1]
+        U_mean = 0.5 * (U_mean + _mirror(U_mean))
+        uu_mean = 0.5 * (uu_mean + _mirror(uu_mean))
+        vv_mean = 0.5 * (vv_mean + _mirror(vv_mean))
+        ww_mean = 0.5 * (ww_mean + _mirror(ww_mean))
+        uw_mean = 0.5 * (uw_mean - _mirror(uw_mean))
+        print("  Closed channel: folded about the centreline "
+              "(2x the samples; <u'w'> as odd, the rest as even)")
+
     # Compute dU/dz correctly from U_mean (ignore dUdz_mean from file)
     # Note: omega_y_mean ≈ dU/dz since dW/dx = 0 statistically
     # Now using augmented grid with wall points for better accuracy
