@@ -41,13 +41,14 @@ boundary_conditions:
     type: "dirichlet"   # no-slip: closed channel
 
 initialization:
-  # Continues from t = 249.7 of the previous run, which had already spent 100
-  # t.u. equilibrating to the corrected advection operator (47fe834) and then
-  # collected 150 samples. The FIELD is fully developed and stays; only the
-  # STATISTICS are discarded, because they were accumulated about the
-  # instantaneous plane mean and so under-report u'u' and v'v' (see
-  # torchannel/turbstats.py). No spin-up is needed: nothing about the solver
-  # changed, only what is recorded.
+  # Continues the same fully-developed field, now ~326 t.u. past the point where
+  # it finished equilibrating to the corrected advection operator (47fe834).
+  # STATISTICS are discarded again, and for a reason that cannot be repaired
+  # afterwards: before 3752aac the stresses were formed from velocities
+  # interpolated to cell centres, and that 2-point average is a low-pass filter
+  # applied to the 3-D field BEFORE the reduction to a profile. The variance it
+  # removed is not recoverable from a stored uu_sum. No spin-up is needed --
+  # nothing about the solver has changed at any point, only what is recorded.
   #
   # To rebuild from scratch instead, point field_file at
   # examples/re180_closed/seed_full180.npz, produced by
@@ -56,7 +57,7 @@ initialization:
   # Navier-Stokes, so a cleanly mirrored field sits on an invariant manifold and
   # would stay symmetric indefinitely).
   type: "parabolic"                 # ignored: field_file makes this a restart
-  field_file: "results_re180_closed_run332/fields.npz"
+  field_file: "results_re180_closed_run335/fields.npz"
   reset_time: true
 
 solver:
