@@ -168,6 +168,103 @@ def test_divergence_of_uniform_flow_is_zero():
 
 
 # --------------------------------------------------------------------------
+# Advection: conservation and face coverage
+# --------------------------------------------------------------------------
+
+def _turbulent_like_field(nx, ny, nz, top_bc="dirichlet", seed=3):
+    """Random ghosted field with the solver's own BCs applied."""
+    from torchannel.solver import apply_bc_all
+
+    torch.manual_seed(seed)
+    u = torch.randn(nx + 1, ny + 2, nz + 2)
+    v = torch.randn(nx + 2, ny + 1, nz + 2)
+    w = torch.randn(nx + 2, ny + 2, nz + 1)
+    apply_bc_all(u, v, w, top_bc)
+    return u, v, w
+
+
+def test_advection_conserves_momentum_globally():
+    """The divergence form must telescope to the boundary fluxes and no further.
+
+    With periodic x/y and w = 0 at both walls, every flux in adv_u and adv_v
+    cancels against its neighbour, so the volume-weighted sum is exactly zero in
+    exact arithmetic. This is not a decorative property: any face left out of
+    the loop turns the operator into a net momentum source, and at nx = 192 a
+    single skipped x-plane injected 0.57% of the applied streamwise force --
+    enough to bias u_tau and the whole Reynolds-stress budget. Regression guard
+    for that bug.
+    """
+    from torchannel.operators import advection_u, advection_v
+
+    nx, ny, nz, Lz = 12, 10, 20, 1.0
+    dx, dy = 2 * np.pi / nx, np.pi / ny
+    _, _, dz_f, _ = generate_grid(1.6, nz, Lz, stretching_type="bottom")
+    u, v, w = _turbulent_like_field(nx, ny, nz)
+
+    vol = (dx * dy * dz_f).view(1, 1, -1)
+    scale = float(vol.sum()) * nx * ny        # domain volume, for a relative bound
+    for name, adv in (("u", advection_u(u, v, w, nx, ny, nz, dx, dy, dz_f)),
+                      ("v", advection_v(u, v, w, nx, ny, nz, dx, dy, dz_f))):
+        total = float((adv[1:nx + 1, 1:ny + 1, 1:nz + 1] * vol).sum())
+        assert abs(total) / scale < 1e-14, \
+            f"adv_{name} is not conservative: net momentum source {total:.3e}"
+
+
+@pytest.mark.parametrize("top_bc", ["dirichlet", "neumann"])
+def test_every_physical_face_gets_a_right_hand_side(top_bc):
+    """No velocity face may be left un-advanced.
+
+    u is stored with shape nx+1 and apply_bc_all does ``u[0] = u[-1]``, so index
+    nx is the master copy of a physical face and index 0 its ghost -- likewise
+    v[:, ny] vs v[:, 0]. Slicing the RHS as [1:nx] instead of [1:nx+1] silently
+    freezes one whole plane out of the advection and xy-diffusion. Only w's
+    k = 0 and k = nz may be zero: those are the walls.
+    """
+    from torchannel.operators import compute_momentum_rhs_fused_imex
+
+    nx, ny, nz, Lz = 12, 10, 20, 1.0
+    dx, dy = 2 * np.pi / nx, np.pi / ny
+    _, _, dz_f, dz_c = generate_grid(1.6, nz, Lz, stretching_type="bottom")
+    u, v, w = _turbulent_like_field(nx, ny, nz, top_bc)
+
+    rhs_u, rhs_v, rhs_w = compute_momentum_rhs_fused_imex(
+        u, v, w, nx, ny, nz, dx, dy, dz_c, dz_f, nu=1e-3)
+
+    per_plane_u = rhs_u[:, 1:-1, 1:-1].abs().amax(dim=(1, 2))
+    per_plane_v = rhs_v[1:-1, :, 1:-1].abs().amax(dim=(0, 2))
+    per_plane_w = rhs_w[1:-1, 1:-1, :].abs().amax(dim=(0, 1))
+
+    assert (per_plane_u[1:nx + 1] > 0).all(), \
+        f"u-faces with no RHS: {torch.nonzero(per_plane_u[1:nx + 1] == 0).flatten() + 1}"
+    assert (per_plane_v[1:ny + 1] > 0).all(), \
+        f"v-faces with no RHS: {torch.nonzero(per_plane_v[1:ny + 1] == 0).flatten() + 1}"
+    assert (per_plane_w[1:nz] > 0).all(), "interior w-faces with no RHS"
+    assert per_plane_w[0] == 0 and per_plane_w[nz] == 0, "walls must not be advanced"
+
+
+def test_fused_imex_kernel_matches_separate_operators():
+    """The fused kernel is an optimisation, not a different discretisation."""
+    from torchannel.operators import (advection_u, advection_v, advection_w,
+                                      compute_momentum_rhs_fused_imex,
+                                      diffusion_xy_u, diffusion_xy_v, diffusion_xy_w)
+
+    nx, ny, nz, Lz, nu = 12, 10, 20, 1.0, 1e-3
+    dx, dy = 2 * np.pi / nx, np.pi / ny
+    _, _, dz_f, dz_c = generate_grid(1.6, nz, Lz, stretching_type="bottom")
+    u, v, w = _turbulent_like_field(nx, ny, nz)
+
+    fused = compute_momentum_rhs_fused_imex(u, v, w, nx, ny, nz, dx, dy, dz_c, dz_f, nu)
+    separate = (
+        diffusion_xy_u(u, nx, ny, nz, dx, dy, nu) - advection_u(u, v, w, nx, ny, nz, dx, dy, dz_f),
+        diffusion_xy_v(v, nx, ny, nz, dx, dy, nu) - advection_v(u, v, w, nx, ny, nz, dx, dy, dz_f),
+        diffusion_xy_w(w, nx, ny, nz, dx, dy, nu) - advection_w(u, v, w, nx, ny, nz, dx, dy, dz_c),
+    )
+    for name, a, b in zip("uvw", fused, separate):
+        err = float((a - b).abs().max())
+        assert err < 1e-12, f"fused and separate {name}-RHS disagree by {err:.3e}"
+
+
+# --------------------------------------------------------------------------
 # Statistics: open- vs closed-channel u_tau
 # --------------------------------------------------------------------------
 
