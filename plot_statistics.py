@@ -744,12 +744,21 @@ def main():
         vv_mean = data['vv_mean']
         ww_mean = data['ww_mean']
         uw_mean = data['uw_mean']
-        kx = data['kx']
-        ky = data['ky']
-        E_uu_2d = data['E_uu_2d']
-        E_vv_2d = data['E_vv_2d']
-        E_ww_2d = data['E_ww_2d']
-        E_uw_2d = data['E_uw_2d']
+        # Spectra are OPTIONAL: a file converted from another solver's output
+        # (scripts/cans_stats_to_npz.py) carries the profiles but no 2D spectra.
+        # Everything else plots identically, which is the point -- the two codes
+        # are then drawn by the same code path on the same axes.
+        if 'kx' in data.files:
+            kx = data['kx']
+            ky = data['ky']
+            E_uu_2d = data['E_uu_2d']
+            E_vv_2d = data['E_vv_2d']
+            E_ww_2d = data['E_ww_2d']
+            E_uw_2d = data['E_uw_2d']
+        else:
+            kx = ky = None
+            E_uu_2d = E_vv_2d = E_ww_2d = E_uw_2d = None
+            print("  (no 2D spectra in this file -- profile plots only)")
         n_samples = int(data['n_samples'])
         
         nu_from_file = data.get('nu', None)
@@ -859,13 +868,16 @@ def main():
     else:
         _half_mask = None
 
-    # Premultiply spectra: kx * ky * E(kx, ky)
-    # Create 2D wavenumber grids
-    KX, KY = np.meshgrid(kx, ky, indexing='ij')
-    premult_uu = KX * KY * E_uu_2d
-    premult_vv = KX * KY * E_vv_2d
-    premult_ww = KX * KY * E_ww_2d
-    premult_uw = KX * KY * E_uw_2d
+    # Premultiply spectra: kx * ky * E(kx, ky). Skipped when the file carries no
+    # spectra (see above); the spectra figures are then simply not produced.
+    if kx is not None:
+        KX, KY = np.meshgrid(kx, ky, indexing='ij')
+        premult_uu = KX * KY * E_uu_2d
+        premult_vv = KX * KY * E_vv_2d
+        premult_ww = KX * KY * E_ww_2d
+        premult_uw = KX * KY * E_uw_2d
+    else:
+        premult_uu = premult_vv = premult_ww = premult_uw = None
 
     # Determine nu (prefer command line, fallback to file, error if neither)
     if args.Re is not None:
@@ -1012,11 +1024,17 @@ def main():
     spectra_z = None
     if not args.checkpoint and 'spectra_z' in data.files:
         spectra_z = data['spectra_z']
+    # No spectra in the file at all (e.g. converted from CaNS, whose out1d_chan
     elif args.checkpoint and 'spectra_z' in data.files:
         spectra_z = data['spectra_z']
+    # No spectra in the file at all (e.g. converted from CaNS, whose out1d_chan
+    # writes profiles only) -- skip figure 4 entirely; the profiles are unaffected.
+    _no_spectra = kx is None
 
     spectra_figs = []   # list of (fig, filename_tag)
-    if spectra_z is not None:
+    if _no_spectra:
+        fig4, spectra_figs = None, []
+    elif spectra_z is not None:
         for i, z_pl in enumerate(spectra_z):
             figS = plt.figure(figsize=(12, 10))
             gsS = figS.add_gridspec(2, 2, hspace=0.35, wspace=0.35)
